@@ -210,7 +210,7 @@ def infer(model, recs, bs=None, occ_ratio=0.0):
     """occ_ratio > 0: deterministic synthetic occlusion of every GT object (evaluation-time occlusion sweep)."""
     model.eval()
     allc = {c: i for i, c in enumerate(sorted({c for r in recs for c in r["cls"]}))} if occ_ratio > 0 else {}
-    loader = make_loader(recs, allc, False, bs=bs or max(1, C.BATCH))
+    loader = make_loader(recs, allc, False, bs=bs or max(2, 2 * C.BATCH))   # inference needs no gradients: bigger batches
     preds, t_model, n = [None] * len(recs), 0.0, 0
     for bi, (xs, ts) in enumerate(loader):
         xs = [x.to(DEVICE, non_blocking=True) for x in xs]

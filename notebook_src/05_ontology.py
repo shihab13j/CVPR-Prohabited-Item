@@ -125,3 +125,12 @@ def order_classes(cs):
 ONTOLOGY_VERSION = sha(dict(canon=CANON, alias=SEM_ALIAS if C.USE_SEMANTIC_ALIASES else {}, super=SUPER,
                             attrs={k: sorted(v) for k, v in CLASS_ATTR.items()}))
 print("ontology version", ONTOLOGY_VERSION)
+
+
+# CLIP prompts (shared by the prepare step, which caches the embeddings, and the model)
+TEXT_PROMPTS = ["an x-ray scan of a {}", "a {} inside an x-ray baggage image", "a photo of a {}"]
+THREAT_PROMPTS = ["an x-ray scan of a dangerous prohibited item", "a threat object hidden in luggage", "a prohibited item"]
+
+
+def all_text_prompts():
+    return [t.format(TEXT_NAME.get(c, c.replace("_", " "))) for c in GLOBAL_ORDER for t in TEXT_PROMPTS] + THREAT_PROMPTS

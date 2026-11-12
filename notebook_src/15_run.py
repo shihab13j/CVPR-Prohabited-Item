@@ -32,7 +32,7 @@ errors = RUN_STATUS[RUN_STATUS.status.str.startswith("error")] if len(RUN_STATUS
 def estimate_full_plan():
     """Project measured test-mode speeds to the full plan (all tiers) on this GPU."""
     rows, speed = [], {}
-    for rd in RUNS_DIR.glob("*"):
+    for rd in all_runs():
         sp, dep = jload(rd / "config.json", {}).get("spec"), jload(rd / "deploy.json", {})
         if sp and dep.get("sec_per_iter"):
             two_view = bool(sp.get("mcfg", {}).get("sira_cf") or sp.get("mcfg", {}).get("occ"))
@@ -45,7 +45,7 @@ def estimate_full_plan():
     old_seeds = (C.SEEDS_MAIN, C.SEEDS_ABL)
     C.SEEDS_MAIN, C.SEEDS_ABL = [0, 1, 2], [0]       # the FULL plan: 3 seeds for the core runs
     try:
-        full_reg = registry()
+        full_reg = [s for s in registry() if s["tier"] in TIERS]
     finally:
         C.SEEDS_MAIN, C.SEEDS_ABL = old_seeds
     for s in full_reg:
@@ -63,7 +63,7 @@ def estimate_full_plan():
     summ = df.groupby(["tier", "group"]).agg(runs=("run", "count"), hours=("total_h", "sum")).reset_index()
     summ["compute_units"] = summ.hours * cu
     tot = df.groupby("tier").total_h.sum()
-    print(f"\nProjected FULL plan on {GPU_NAME} (measured speeds; Colab ≈ {cu} CU/h — verify on your Resources page):")
+    print(f"\nProjected FULL plan for TIERS={TIERS} on {GPU_NAME} (measured speeds; Colab ≈ {cu} CU/h — verify on your Resources page):")
     display(summ)
     for t, h in tot.items():
         print(f"   tier {t}: {h:.1f} GPU-hours ≈ {h * cu:.0f} compute units")
@@ -73,3 +73,6 @@ def estimate_full_plan():
 
 if MODE == "test":
     PLAN = estimate_full_plan()
+if MODE == "full" and PLATFORM == "colab":
+    # every result is already on Drive; tables / figures / gates are built later with MODE='report' on a CPU runtime
+    release_runtime("all selected Colab runs are finished or paused")

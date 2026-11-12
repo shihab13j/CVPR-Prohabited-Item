@@ -38,6 +38,39 @@ if MODE in ("test", "full") and DEVICE.type != "cuda" and not SMOKE:
                        "(Your previous run trained on CPU: 1 epoch took 10.5 hours.)")
 
 
+def release_runtime(reason):
+    """Colab: flush Drive and give the GPU back so no compute units are spent on an idle runtime."""
+    if PLATFORM != "colab" or not AUTO_DISCONNECT:
+        return
+    print(f"⏏  releasing the Colab runtime: {reason} (all results are on Drive)")
+    try:
+        drive.flush_and_unmount()
+    except Exception:
+        pass
+    from google.colab import runtime
+    runtime.unassign()
+
+
+if PLATFORM == "colab" and MODE in ("test", "full") and DEVICE.type == "cuda" and AUTO_DISCONNECT:
+    import threading
+
+    def _gpu_watchdog():
+        idle = 0
+        while True:
+            time.sleep(60)
+            try:
+                u = int(subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                                       capture_output=True, text=True, timeout=20).stdout.strip().split("\n")[0])
+            except Exception:
+                continue
+            idle = idle + 1 if u < 3 else 0
+            if idle >= IDLE_DISCONNECT_MIN:
+                release_runtime(f"GPU idle for {idle} min (finished, crashed or stuck)")
+                return
+    threading.Thread(target=_gpu_watchdog, daemon=True).start()
+    print(f"GPU idle watchdog on: the runtime is released after {IDLE_DISCONNECT_MIN} idle minutes")
+
+
 def has_internet(timeout=3):
     import socket
     try:

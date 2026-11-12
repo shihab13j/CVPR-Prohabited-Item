@@ -1,23 +1,36 @@
 # XGuard — Unknown-Threat Discovery under Compound Distribution Shift in X-ray Security Inspection
 
-**Colab Pro (A100) notebook.** Data comes from Kaggle **once**, on a cheap CPU runtime, and is stored on your Google Drive as a compact pack. GPU sessions never download datasets.
+One notebook, two platforms: **Tier 1 on Colab Pro (A100)** and **Tiers 2–3 on Kaggle (free GPU)**. Everything that does not need a GPU happens on a CPU runtime, so no GPU time is spent on downloads, audits, CLIP loading or tables.
 
-## How to run (3 steps)
+## Colab Pro (Tier 1: core with 3 seeds + component ablation)
+| Step | Runtime | Config | What happens |
+|---|---|---|---|
+| 1 | **CPU** | `MODE="prepare"` | Downloads the Kaggle mirrors once (add the Colab secrets `KAGGLE_USERNAME` and `KAGGLE_KEY` first). Then it verifies the data, runs the leakage audit, and pre-computes the CLIP text embeddings and the COCO weights. Output is a compact pack in `MyDrive/xguard/pack_v2`. |
+| 2 | **A100** | `MODE="test"` | All tier-1 code paths on real data with a few iterations, the unit tests and the resume test. It prints the measured **GPU-hours and compute units** for tier 1, then **releases the runtime by itself**. |
+| 3 | **A100** | `MODE="full"` | Tier 1. SIXray is unpacked first and training starts right away; the other test sets unpack in the background. After each epoch everything is saved to Drive. When the selected runs finish, or if the GPU is idle for 20 minutes, the runtime is **released automatically**. After a disconnect, choose *Run all* again; finished runs are skipped. |
+| 4 | **CPU** | `MODE="report"` | Put the Kaggle `xguard_results_full.zip` into `MyDrive/xguard/kaggle_results/`. This step merges everything into Tables T0–T14, Figures 1–8 and the release gates, without any GPU cost. |
 
-| Step | Runtime | Set in the config cell | What happens | Time / cost |
-|---|---|---|---|---|
-| **1. prepare** (once) | **CPU** (Runtime → Change runtime type → CPU) | `MODE = "prepare"` | Kaggle API downloads the 5 mirrors in parallel to local SSD → discovery, verification against official dataset sizes, lineage & leakage audit → compact pack (images at 800 px, JPEG q95, boxes in original coordinates) written to `MyDrive/xguard/pack_v2` | ~30–60 min on CPU (≈ 0 GPU units) |
-| **2. test** | **A100** | `MODE = "test"` | Copies the pack to local SSD, runs the correctness unit tests, the reproducibility/resume test and **every** model variant, metric, table, figure and release gate on **real data** with a few iterations, then prints the measured **time and compute units per tier** | ~30–45 min |
-| **3. full** | **A100** | `MODE = "full"`, `TIERS = [1]` (then `[2]`, `[3]`) | The real experiments. Everything is saved to Drive after every epoch; if Colab disconnects, simply *Run all* again — finished runs are skipped (verified by fingerprints) | see the estimate printed by step 2 |
+## Kaggle (Tiers 2–3: LOCO first, then the supporting ablations, baselines, zero-shot, in-domain, LODO, encoders, YOLO / RT-DETR)
+1. **CPU session.** Add Input: `khanhbtq99/sixray`, `witsarutsarai/sixray-p1`, `banan41k/xray-contraband-detection`, `newashish/hixray`, `alirzaei/opixray-yolo`, and optionally your OPIXray OL lists. Set `MODE="prepare"` and choose *Save & Run All*. The pack is written to the output.
+2. **GPU session** (Accelerator **GPU T4×2/P100**, Internet **on**). Add Input: the output of step 1. Set `MODE="test"`, then `MODE="full"`, using *Save & Run All* so the run continues when the browser is closed. Each session lasts at most 12 h; add the previous output as input and run again to continue.
+3. Download `xguard_results_full.zip` and put it into `MyDrive/xguard/kaggle_results/` for step 4 above.
 
-**Before step 1:** kaggle.com → Settings → API → *Create New Token*. In Colab click the 🔑 *Secrets* icon and add `KAGGLE_USERNAME` and `KAGGLE_KEY` (enable notebook access). Optional: put OPIXray's `test_knife.txt`, `test_knife-1.txt`, `test_knife-2.txt`, `test_knife-3.txt` into `MyDrive/xguard/opixray_ol/` (this enables the OL1–OL3 occlusion table).
+Kaggle uses batch 4 with gradient accumulation 2, which gives the same effective batch of 8 as Colab, so the results are comparable.
 
 | Key | Kaggle dataset | Verified content (real Kaggle run) |
 |---|---|---|
-| sixray | `khanhbtq99/sixray` | Roboflow export: train 11,638 / valid 1,662 / test 831 files with **augmented copies** (`P00031_jpg.rf.<hash>.jpg`) and **5 classes (no hammer)** → collapsed to one copy per original id, ids never shared across splits |
-| sixray-p1 | `witsarutsarai/sixray-p1` (file `JPEGImage.tar.gz00` only, ~4 GB) | first part of the official SIXray archive → clean bags (N*.jpg) for false-alarm metrics; the other 15 parts are not needed |
-| pidray | `banan41k/xray-contraband-detection` | PIDray: 47,674 PNG + official COCO jsons; test = 9,482 easy + 3,733 hard + 5,005 hidden = **18,220 (matches the paper)**; the mirror's own random `splits/*.txt` are ignored |
-| hixray | `newashish/hixray` | official 36,295 train / 9,069 test, per-image TXT |
-| opixray | `alirzaei/opixray-yolo` | YOLO; train 7,109; official test 1,776 cut into val 888 + test 888 → merged back |
+| sixray | `khanhbtq99/sixray` | Roboflow export with augmented copies and **5 classes (no hammer)**; collapsed to one copy per original image ID, IDs never shared across splits |
+| sixray-p1 | `witsarutsarai/sixray-p1` (first part only on Colab) | clean bags for the false-alarm metrics |
+| pidray | `banan41k/xray-contraband-detection` | PIDray; test 18,220 = 9,482 easy + 3,733 hard + 5,005 hidden (matches the paper) |
+| hixray | `newashish/hixray` | official 36,295 / 9,069 |
+| opixray | `alirzaei/opixray-yolo` | official test of 1,776 split into val + test, merged back here |
 
-**Honesty rules built into the code:** no target data is used for training, thresholds or checkpoint selection (source validation only); exact / harmonized / hierarchical AP are reported separately; leakage exclusions are frozen before any evaluation; metrics that do not apply are marked `n/a` with a reason; stale results are never reused (fingerprints); zero-shot "oracle vocabulary" baselines are labelled as references; methods without public code (OVXD, STING-BEE, CHR, DOAM, LIM, SDANet) are not re-implemented — published numbers can be merged via `C.EXTERNAL_RESULTS` and are marked *(reported)*. The model is a two-stage R50-FPN detector (not DINO/DETR) for compute reasons — state this in the paper.
+**Honesty rules in the code:**
+- No target data is used for training, thresholds or checkpoint choice.
+- Exact, harmonized and hierarchical AP are reported separately.
+- Leakage exclusions are frozen before any evaluation.
+- Metrics that do not apply show `n/a` with a reason.
+- Fingerprints prevent stale results from being reused.
+- Oracle-vocabulary zero-shot runs are labelled as references only.
+- Methods without public code are not re-implemented.
+- The model is a two-stage R50-FPN, not DETR, for compute reasons; state this in the paper.

@@ -3,7 +3,7 @@
 **Deliverable:** [`XGuard_Colab.ipynb`](XGuard_Colab.ipynb). It is built from `notebook_src/`, one file per cell. Run it on Colab Pro: `prepare` on a CPU runtime, then `test` and `full` on an A100. It also runs on Kaggle with the GPU accelerator turned **on**. Your earlier Kaggle run was on CPU, which is why one epoch took 10.5 hours.
 
 ## Workflow
-1. **`MODE="prepare"` on a Colab CPU runtime.** First add `KAGGLE_USERNAME` and `KAGGLE_KEY` as Colab secrets. This step then:
+1. **`MODE="prepare"` on a CPU runtime (Colab) or CPU session (Kaggle).** First add `KAGGLE_USERNAME` and `KAGGLE_KEY` as Colab secrets. This step then:
    - downloads the Kaggle mirrors once
    - verifies them against the official dataset sizes
    - audits lineage and leakage

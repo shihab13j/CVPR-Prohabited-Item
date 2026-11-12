@@ -13,16 +13,21 @@ T_SESSION_START = time.time()
 CODE_VERSION = "xguard-v2.0"          # bump when you change model/training code on purpose (part of every run fingerprint)
 
 # ------------------------------------------------------------------------------
+# WHERE / WHAT TO RUN
+#   Colab Pro A100 : Tier 1  = core (base vs XGuard, 3 seeds, full test sets) + component ablation
+#   Kaggle GPU     : Tier 2  = LOCO, prototype / unknown-generation / SIRA / occlusion ablations, baselines, zero-shot
+#                    Tier 3  = in-domain, LODO, encoder, #sources, YOLO / RT-DETR
+#
 # MODE
-#   "prepare" : Colab CPU runtime (cheap). Downloads the Kaggle datasets ONCE, verifies them, runs the
-#               leakage audit and writes a compact image pack + manifest to Google Drive. No GPU needed.
-#   "test"    : Colab A100 (or Kaggle GPU). Restores the pack, then runs EVERY stage on real data with a
-#               few iterations per model: unit tests, all model variants, all metrics/tables/figures,
-#               release gates and a measured time / compute-unit estimate. Run this before "full".
-#   "full"    : the real experiments (resumable; finished runs are skipped).
+#   "prepare" : CPU runtime/session (no GPU cost). Data -> verification -> leakage audit -> compact pack
+#               (+ CLIP text embeddings + COCO weights cached inside the pack). Colab: pack on Google Drive.
+#               Kaggle: pack in /kaggle/working (attach this notebook's output as input to the GPU sessions).
+#   "test"    : GPU. Every stage on real data with a few iterations + measured time / compute-unit estimate.
+#   "full"    : GPU. The real experiments of this platform's tiers (resumable, fingerprinted).
+#   "report"  : CPU. Merges Colab + Kaggle results -> all tables, figures, release gates (no GPU cost).
 # ------------------------------------------------------------------------------
 MODE = "test"
-TIERS = [1]            # full mode: 1 = paper-critical, 2 = supporting ablations/baselines, 3 = extra (see registry cell)
+TIERS = None           # None = this platform's default (Colab [1], Kaggle [2, 3]); or e.g. [2]
 SMOKE = os.environ.get("XGUARD_SMOKE", "0") == "1"   # tiny CPU self-test used by the author; leave it alone
 if os.environ.get("XGUARD_MODE"):
     MODE = os.environ["XGUARD_MODE"]
@@ -34,30 +39,56 @@ PLATFORM = "colab" if "google.colab" in sys.modules or os.path.exists("/content/
            "kaggle" if os.path.exists("/kaggle") else "local"
 if os.environ.get("XGUARD_PLATFORM"):
     PLATFORM = os.environ["XGUARD_PLATFORM"]
+if TIERS is None:
+    TIERS = [1] if PLATFORM in ("colab", "local") else [2, 3]
+AUTO_DISCONNECT = True          # Colab: release the GPU runtime when the work is done (results are on Drive)
+IDLE_DISCONNECT_MIN = 20        # Colab: release the GPU runtime if it sits idle this long (crash / stuck cell)
 
 DRIVE_DIR = "/content/drive/MyDrive/xguard"      # Colab: pack + all run outputs live here (survive disconnects)
+
+
+def _find_kaggle_pack():
+    for pat in ["/kaggle/input/*/pack_v2", "/kaggle/input/*/*/pack_v2", "/kaggle/input/*/*/*/pack_v2", "/kaggle/input/*/*/*/*/pack_v2"]:
+        hits = [h for h in glob.glob(pat) if os.path.exists(os.path.join(h, "meta.pkl"))]
+        if hits:
+            return Path(hits[0])
+    return Path("/kaggle/working/pack_v2")
+
+
 if PLATFORM == "colab":
     INPUT_ROOT = "/content/raw"                   # raw Kaggle downloads (prepare mode only, local SSD)
     PACK_LOCAL = Path("/content/pack")            # pack copied from Drive to local SSD for fast loading
+    PACK_DRIVE = Path(DRIVE_DIR) / "pack_v2"
     WORK = Path(DRIVE_DIR) / "work"
     CACHE = Path("/content/cache")
+    PACK_SCOPE = "colab"                          # SIXray complete + val/test of the other datasets (tier 1 needs no more)
 elif PLATFORM == "kaggle":
     INPUT_ROOT = "/kaggle/input"
-    PACK_LOCAL = Path("/kaggle/working/pack")
+    PACK_LOCAL = Path("/tmp/xguard_pack")         # /tmp: not counted in the 20 GB output limit
+    PACK_DRIVE = Path("/kaggle/working/pack_v2") if MODE == "prepare" else _find_kaggle_pack()
     WORK = Path("/kaggle/working/xguard")
-    CACHE = WORK / "cache"
+    CACHE = Path("/tmp/xguard_cache")
+    PACK_SCOPE = "all"                            # tiers 2-3 also train on PIDray / HiXray / OPIXray
 else:
     INPUT_ROOT = os.environ.get("XGUARD_INPUT", "./input")
     PACK_LOCAL = Path(os.environ.get("XGUARD_PACK", "./pack"))
+    PACK_DRIVE = Path("./pack_drive")
     WORK = Path(os.environ.get("XGUARD_WORK", "./xguard_work"))
     CACHE = WORK / "cache"
-PACK_DRIVE = Path(os.environ.get("XGUARD_PACK_DRIVE", str(Path(DRIVE_DIR) / "pack_v2")))
+    PACK_SCOPE = os.environ.get("XGUARD_PACK_SCOPE", "all")
+if os.environ.get("XGUARD_PACK_DRIVE"):
+    PACK_DRIVE = Path(os.environ["XGUARD_PACK_DRIVE"])
 if os.environ.get("XGUARD_INPUT"):
     INPUT_ROOT = os.environ["XGUARD_INPUT"]
 if os.environ.get("XGUARD_WORK"):
     WORK = Path(os.environ["XGUARD_WORK"])
 if os.environ.get("XGUARD_PACK"):
     PACK_LOCAL = Path(os.environ["XGUARD_PACK"])
+# Report mode: run folders of the OTHER platform. Colab: unzip the Kaggle "xguard_results_full.zip" into
+# MyDrive/xguard/kaggle_results/ (done automatically if the zip is placed there). Kaggle: attach the Colab results.
+EXTRA_RESULT_DIRS = [Path(DRIVE_DIR) / "kaggle_results"] if PLATFORM == "colab" else \
+    [Path(p) for p in glob.glob("/kaggle/input/*/colab_results")] if PLATFORM == "kaggle" else \
+    [Path(p) for p in os.environ.get("XGUARD_EXTRA_RESULTS", "").split(",") if p]
 CACHE = Path(os.environ.get("XGUARD_CACHE", str(CACHE)))
 
 # ---- datasets (Kaggle slugs used by the Colab "prepare" step) ---------------------
@@ -98,6 +129,8 @@ C = SimpleNamespace(
     TEST_ITERS=None, TEST_EVAL=None, TEST_VAL=None,
     CU_PER_HOUR={"A100": 11.8, "L4": 4.8, "T4": 1.8, "V100": 4.9},   # Colab compute units/hour (verify on your Resources page)
 )
+if PLATFORM == "kaggle":      # T4 / P100 have 16 GB: same EFFECTIVE batch (8) as Colab via accumulation -> comparable runs
+    C.BATCH, C.ACCUM = 4, 2
 if MODE == "test":
     C.TEST_ITERS, C.TEST_EVAL, C.TEST_VAL, C.BOOTSTRAP = 30, 120, 60, 100
     C.SEEDS_MAIN, C.SEEDS_ABL = [0], [0]
@@ -111,7 +144,7 @@ if SMOKE:   # tiny CPU self-test
 for sub in ["runs", "tables", "figures", "audit", "logs"]:
     (WORK / sub).mkdir(parents=True, exist_ok=True)
 CACHE.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("TORCH_HOME", str(CACHE / "torch"))
+os.environ["TORCH_HOME"] = str((PACK_LOCAL if MODE != "prepare" else PACK_DRIVE) / "torch")   # weights travel inside the pack
 os.environ.setdefault("HF_HOME", str(CACHE / "hf"))
 jdump_cfg = {k: v for k, v in vars(C).items()}
 json.dump(dict(MODE=MODE, TIERS=TIERS, PLATFORM=PLATFORM, CODE_VERSION=CODE_VERSION, **jdump_cfg),

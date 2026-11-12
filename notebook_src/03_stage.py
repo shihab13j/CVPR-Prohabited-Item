@@ -4,9 +4,11 @@
 #                                  -> compact pack on Google Drive (images resized to PACK_LONG, JPEG q95,
 #                                  boxes kept in ORIGINAL coordinates, so metrics are unchanged).
 #   Colab "test"/"full" (GPU)    : copy + untar the pack from Drive to local SSD (a few minutes, no Kaggle download).
-#   Kaggle platform              : datasets are read directly from /kaggle/input (no pack needed).
+#   Kaggle "prepare" (CPU session): datasets attached as inputs -> same pipeline -> pack in /kaggle/working/pack_v2.
+#   Kaggle "test"/"full" (GPU)   : attach the prepare notebook's OUTPUT as input; the pack is found automatically.
 # ==============================================================================
 PACK_READY = False
+PACK_EVENTS = {}
 
 
 def disk_free_gb(p):
@@ -16,22 +18,71 @@ def disk_free_gb(p):
     return shutil.disk_usage(p).free / 1e9
 
 
-def restore_pack():
-    if (PACK_LOCAL / "meta.pkl").exists() and (PACK_LOCAL / ".restored").exists():
-        return True
+def _extract(k, shard):
+    marker = PACK_LOCAL / f".done_{k}"
+    if not marker.exists():
+        subprocess.run(["tar", "-xf", str(shard), "-C", str(PACK_LOCAL)], check=True)
+        marker.write_text("ok")
+    PACK_EVENTS[k].set()
+
+
+def restore_pack(first=("sixray",)):
+    """Copy the pack to local SSD. The source-training dataset (SIXray) is extracted FIRST so training can start
+    immediately; the other datasets are extracted by a background thread while the GPU is already busy."""
     if not (PACK_DRIVE / "meta.pkl").exists():
-        return False
+        return (PACK_LOCAL / "meta.pkl").exists()
+    import threading
     PACK_LOCAL.mkdir(parents=True, exist_ok=True)
-    t0 = time.time()
-    shards = sorted(PACK_DRIVE.glob("images_*.tar"))
-    print(f"restoring pack from {PACK_DRIVE}: {len(shards)} shards, "
-          f"{sum(s.stat().st_size for s in shards) / 1e9:.1f} GB -> {PACK_LOCAL}")
-    for s in shards:
-        subprocess.run(["tar", "-xf", str(s), "-C", str(PACK_LOCAL)], check=True)
     shutil.copy(PACK_DRIVE / "meta.pkl", PACK_LOCAL / "meta.pkl")
-    (PACK_LOCAL / ".restored").write_text("ok")
-    print(f"pack restored in {(time.time() - t0) / 60:.1f} min")
+    for extra in ["clip_text.pt", "torch"]:
+        src = PACK_DRIVE / extra
+        if src.is_dir():
+            shutil.copytree(src, PACK_LOCAL / extra, dirs_exist_ok=True)
+        elif src.exists():
+            shutil.copy(src, PACK_LOCAL / extra)
+    shards = {f.stem.replace("images_", ""): f for f in sorted(PACK_DRIVE.glob("images_*.tar"))}
+    for k in shards:
+        PACK_EVENTS[k] = threading.Event()
+    t0 = time.time()
+    for k in [k for k in first if k in shards]:
+        _extract(k, shards[k])
+    print(f"pack {PACK_DRIVE}: {', '.join(first)} ready in {(time.time() - t0) / 60:.1f} min; "
+          f"{len(shards) - len(first)} more shards extracting in the background")
+
+    def bg():
+        for k, f in shards.items():
+            if k not in first:
+                _extract(k, f)
+    threading.Thread(target=bg, daemon=True).start()
     return True
+
+
+def wait_pack(ds):
+    ev = PACK_EVENTS.get(ds)
+    if ev is not None and not ev.is_set():
+        t0 = time.time(); print(f"   waiting for the {ds} images to finish extracting…", end=" ")
+        ev.wait(); print(f"{time.time() - t0:.0f}s")
+
+
+def wait_pack_all():
+    for k in list(PACK_EVENTS):
+        wait_pack(k)
+
+
+def resume_previous_outputs():
+    """Kaggle: copy finished runs from previous versions of this notebook attached as input."""
+    if PLATFORM != "kaggle":
+        return
+    n = 0
+    for pat in ["/kaggle/input/*/xguard", "/kaggle/input/*/*/xguard", "/kaggle/input/*/*/*/xguard"]:
+        for cand in glob.glob(pat):
+            for rd_root in Path(cand).glob("runs*"):
+                for rd in rd_root.iterdir():
+                    dst = WORK / rd_root.name / rd.name
+                    if rd.is_dir() and not dst.exists():
+                        shutil.copytree(rd, dst); n += 1
+    if n:
+        print(f"[resume] copied {n} finished run folders from the previous notebook output")
 
 
 def kaggle_auth():
@@ -73,7 +124,8 @@ def kaggle_download(key, slug, file=None):
     return f"{key}: {slug}{' / ' + file if file else ''} -> {size:.1f} GB in {(time.time() - t0) / 60:.1f} min"
 
 
-if MODE in ("test", "full"):
+if MODE in ("test", "full", "report"):
+    resume_previous_outputs()
     PACK_READY = restore_pack()
     if not PACK_READY and PLATFORM == "colab":
         raise RuntimeError(f"No data pack at {PACK_DRIVE}. First run this notebook once with MODE='prepare' on a CPU "
@@ -97,5 +149,11 @@ elif MODE == "prepare":
             print("   OPIXray occlusion lists copied from", OPIXRAY_OL_DIR)
         else:
             print(f"   (optional) OPIXray OL1-3 lists not found in {OPIXRAY_OL_DIR} -> P6 occlusion-level table will be empty")
+if MODE == "report":     # merge the other platform's results (zip files dropped into EXTRA_RESULT_DIRS are unpacked)
+    for d in EXTRA_RESULT_DIRS:
+        for z in Path(d).glob("*.zip") if Path(d).exists() else []:
+            out = Path(d) / z.stem
+            if not out.exists():
+                shutil.unpack_archive(str(z), str(out)); print("unpacked", z)
 NEED_DISCOVERY = not PACK_READY
 print(f"PACK_READY={PACK_READY}  NEED_DISCOVERY={NEED_DISCOVERY}")

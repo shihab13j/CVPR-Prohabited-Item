@@ -11,8 +11,30 @@
 if MODE == "prepare":
     raise StopExecution()   # prepare mode ends after the pack cell
 AVAILABLE = set(REC)
-RUNS_DIR = WORK / ("runs" if MODE == "full" else f"runs_{MODE}")
+RUNS_DIR = WORK / ("runs" if MODE in ("full", "report") else f"runs_{MODE}")
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
+RUNS_DIRS = [RUNS_DIR]
+if MODE == "report":     # + the other platform's finished runs
+    for d in EXTRA_RESULT_DIRS:
+        for pat in ["runs", "*/runs", "*/*/runs", "*/*/*/runs"]:
+            RUNS_DIRS += [Path(x) for x in glob.glob(str(Path(d) / pat)) if Path(x) not in RUNS_DIRS]
+    print("result folders merged:", [str(d) for d in RUNS_DIRS])
+
+
+def all_runs():
+    seen, out = set(), []
+    for d in RUNS_DIRS:
+        for rd in sorted(d.glob("*")):
+            if rd.is_dir() and not rd.name.startswith("_") and rd.name not in seen:
+                seen.add(rd.name); out.append(rd)
+    return out
+
+
+def run_path(name):
+    for d in RUNS_DIRS:
+        if (d / name / "DONE").exists():
+            return d / name
+    return RUNS_DIR / name
 SIX_CLASSES = CLASS_AUDIT[(CLASS_AUDIT.dataset == "sixray")].cls.tolist() if len(CLASS_AUDIT) else []
 LOCO_CLASSES = CLASS_AUDIT[(CLASS_AUDIT.dataset == "sixray") & CLASS_AUDIT.valid_loco].cls.tolist() if len(CLASS_AUDIT) else []
 print("SIXray classes in the data:", SIX_CLASSES, "| valid LOCO folds:", LOCO_CLASSES)
@@ -74,7 +96,7 @@ def S(name, group, tier, train, mcfg=None, kind="xguard", seed=0, targets=None, 
 
 def registry():
     R, six, X = [], ["sixray"], (lambda **k: variant("xguard", **k))
-    for s in C.SEEDS_MAIN:      # ---------------- tier 1
+    for s in C.SEEDS_MAIN:      # ---------------- tier 1 (Colab A100)
         R += [S("six_base", "core", 1, six, variant("base"), seed=s, full_eval=True, analyze=True, occ_sweep=True),
               S("six_xguard", "core", 1, six, variant("xguard"), seed=s, full_eval=True, analyze=True, occ_sweep=True)]
     for s in C.SEEDS_ABL:
@@ -83,7 +105,7 @@ def registry():
                        occ_sweep=v in ("oer", "sira+oer")))
         for c in LOCO_CLASSES:
             for v in ["base", "xguard"]:
-                R.append(S(f"loco-{c}_{v}", "loco", 1, six, variant(v), seed=s, loco=c,
+                R.append(S(f"loco-{c}_{v}", "loco", 2, six, variant(v), seed=s, loco=c,
                            targets=[t for t in ["sixray", "opixray", "pidray"] if t in AVAILABLE]))
         # ---------------- tier 2
         for src in ["v", "t", "a", "vt", "va"]:
@@ -118,13 +140,17 @@ def registry():
 
 
 REGISTRY = registry()
-SELECTED = [s for s in REGISTRY if s["tier"] in TIERS] if MODE == "full" else \
-    [s for s in REGISTRY if s["tier"] in (1, 2) and s["group"] not in ("ultralytics",) and s["seed"] == 0]
-if MODE == "test":   # one representative per configuration type is enough to exercise every code path
-    keep_tags = {"six_base", "six_xguard", "six_sira", "six_oer", "six_sira+oer", "six_sira+oer+stpb+cus", "proto-t", "proto-a",
-                 "unk-gaussian", "unk-slerp", "unk-cus-noent", "scan-fourier", "occ-cutout", "six_fcos", "six_owlvit", "six_gdino-oracle"}
+PRIORITY = ["core", "ablation", "loco", "sira_validation", "unknown_gen", "prototype", "occlusion", "baselines", "zeroshot",
+            "indomain", "lodo", "num_sources", "encoder", "ultralytics"]
+SELECTED = sorted([s for s in REGISTRY if s["tier"] in TIERS], key=lambda s: (PRIORITY.index(s["group"]), s["seed"], s["name"]))
+if MODE == "test":   # one representative per configuration type of THIS platform's tiers exercises every code path
+    keep_tags = {"six_base", "six_xguard", "six_sira", "six_oer", "six_sira+oer", "six_sira+oer+stpb+cus",       # tier 1
+                 "proto-t", "proto-a", "unk-gaussian", "unk-slerp", "unk-cus-noent", "scan-fourier", "occ-cutout",  # tier 2
+                 "six_fcos", "six_owlvit", "six_gdino-oracle", "in-opixray_xguard", "six_yolo11s", "src2"}          # tier 2-3
     keep_tags |= {f"loco-{LOCO_CLASSES[0]}_base", f"loco-{LOCO_CLASSES[0]}_xguard"} if LOCO_CLASSES else set()
-    SELECTED = [s for s in SELECTED if s["tag"] in keep_tags] + [s for s in REGISTRY if s["tag"] == "in-opixray_xguard" and s["seed"] == 0]
+    SELECTED = [s for s in SELECTED if s["tag"] in keep_tags and s["seed"] == 0]
+if MODE == "report":
+    SELECTED = []
 print(f"{len(REGISTRY)} experiments registered; {len(SELECTED)} selected for MODE={MODE}, TIERS={TIERS}")
 print(Counter(f"T{s['tier']}:{s['group']}" for s in SELECTED))
 
@@ -348,11 +374,13 @@ def run_experiment(spec):
     if thr is None:
         vp, _ = infer(model, vrecs)
         thr = compute_thresholds(vp, vrecs, known); jdump(thr, rd / "thresholds.json")
-    dep = dict(train_minutes=meta.get("train_minutes"), sec_per_iter=meta.get("sec_per_iter"), init_used=meta.get("init_used"))
+    dep = dict(train_minutes=meta.get("train_minutes"), sec_per_iter=meta.get("sec_per_iter"), init_used=meta.get("init_used"),
+               gpu=GPU_NAME, platform=PLATFORM, amp=str(AMP_DTYPE), batch=C.BATCH, accum=C.ACCUM)
     eval_minutes = 0.0
     for tgt in targets:
         recs = eval_set(tgt, spec["full_eval"])
         pf = rd / f"preds_{tgt}.pkl"
+        wait_pack(tgt)
         te = time.time()
         if pf.exists():
             preds, sp = load_preds(pf, recs)
@@ -389,6 +417,7 @@ def run_experiment(spec):
         dep["params_M"] = count_params(model); dep["GFLOPs"] = model_flops(model)
     jdump(dep, rd / "deploy.json")
     if spec.get("analyze") and not (rd / "emb.npz").exists():
+        wait_pack_all()
         e = extract_embeddings(model, 40 if C.TEST_ITERS else 150)
         if e is not None:
             np.savez_compressed(rd / "emb.npz", **{k: v for k, v in e.items() if v is not None})

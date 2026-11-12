@@ -12,13 +12,48 @@ def train_cap_order(r):
 
 
 def select_for_pack():
+    """PACK_SCOPE 'colab': tier 1 trains only on SIXray -> other datasets ship only val/test (smaller, faster restore).
+    PACK_SCOPE 'all'  : Kaggle tiers 2-3 also train on PIDray / HiXray / OPIXray."""
     keep = []
     for k, recs in REC.items():
         tr = sorted([r for r in recs if r["split"] == "train" and not r["neg"]], key=train_cap_order)
         if C.MAX_TRAIN_PER_DS:
             tr = tr[: C.MAX_TRAIN_PER_DS]
+        if PACK_SCOPE == "colab" and k != "sixray":
+            tr = []
         keep += tr + [r for r in recs if r["split"] != "train" or r["neg"]]
     return keep
+
+
+def precompute_text_and_weights():
+    """Done on the CPU so that GPU sessions never download or load anything except the detector weights."""
+    os.environ["TORCH_HOME"] = str(PACK_DRIVE / "torch")
+    try:
+        from torchvision.models.detection import FasterRCNN_ResNet50_FPN_Weights
+        from torchvision.models import ResNet50_Weights
+        for w in [FasterRCNN_ResNet50_FPN_Weights.COCO_V1, ResNet50_Weights.IMAGENET1K_V1]:
+            torch.hub.load_state_dict_from_url(w.url, progress=False)
+        print("   COCO + ImageNet weights cached in the pack")
+    except Exception as e:
+        print("   ⚠️  could not cache detector weights (GPU session will download them):", str(e)[:120])
+    try:
+        import transformers
+        from transformers import CLIPModel, CLIPTokenizer
+        prompts = all_text_prompts()
+        tok, m = CLIPTokenizer.from_pretrained(C.CLIP_HF_NAME), CLIPModel.from_pretrained(C.CLIP_HF_NAME).eval()
+        cache = {}
+        with torch.no_grad():
+            for i in range(0, len(prompts), 64):
+                e = m.get_text_features(**tok(prompts[i:i + 64], padding=True, return_tensors="pt"))
+                if not torch.is_tensor(e):
+                    e = e.text_embeds if getattr(e, "text_embeds", None) is not None else e[0]
+                for p_, v in zip(prompts[i:i + 64], F.normalize(e.float(), dim=-1)):
+                    cache[p_] = v
+        cache["__meta__"] = dict(model=C.CLIP_HF_NAME, transformers=transformers.__version__, n=len(prompts))
+        torch.save(cache, PACK_DRIVE / "clip_text.pt")
+        print(f"   CLIP text embeddings for {len(prompts)} prompts cached in the pack")
+    except Exception as e:
+        print("   ⚠️  CLIP text embeddings NOT cached:", str(e)[:150])
 
 
 def pack_one(args):
@@ -61,16 +96,23 @@ if MODE == "prepare":
     sel_uids = {r["uid"] for r in sel if r.get("pack_rel")}
     PACKED_REC = {k: [r for r in v if r["uid"] in sel_uids] for k, v in REC.items()}
     PACK_DRIVE.mkdir(parents=True, exist_ok=True)
+    if not SMOKE:
+        import torch, torch.nn.functional as F
+        precompute_text_and_weights()
     for k in PACKED_REC:
         subprocess.run(["tar", "-cf", str(PACK_DRIVE / f"images_{k}.tar"), "-C", str(PACK_LOCAL), f"images/{k}"], check=True)
     meta = dict(REC=PACKED_REC, DISCOVERY=DISCOVERY, SPLIT_POLICY=SPLIT_POLICY, LINEAGE_LOG=LINEAGE_LOG, EXCLUDED=EXCLUDED,
                 AUDIT_SUMMARY=AUDIT_SUMMARY, STATS=STATS, VERIFICATION=VERIFICATION, CLASS_AUDIT=CLASS_AUDIT,
                 SPLIT_META=SPLIT_META, MANIFEST_HASH=MANIFEST_HASH, ONTOLOGY_VERSION=ONTOLOGY_VERSION,
-                pack_id=pack_id, built=time.strftime("%Y-%m-%d %H:%M"), PACK_LONG=C.PACK_LONG, PACK_QUALITY=C.PACK_QUALITY)
+                pack_id=pack_id, built=time.strftime("%Y-%m-%d %H:%M"), PACK_LONG=C.PACK_LONG, PACK_QUALITY=C.PACK_QUALITY,
+                PACK_SCOPE=PACK_SCOPE, PLATFORM=PLATFORM)
     pickle.dump(meta, open(PACK_DRIVE / "meta.pkl", "wb"))
     size = sum(f.stat().st_size for f in PACK_DRIVE.glob("images_*.tar")) / 1e9
     print(f"\n✅ pack {pack_id} written to {PACK_DRIVE} ({size:.1f} GB, {len(sel_uids)} images).")
-    print("NEXT: Runtime -> Change runtime type -> A100 GPU, set MODE = 'test', Run all.")
+    if PLATFORM == "kaggle":
+        print("NEXT: Save Version (Save & Run All) -> new GPU notebook -> Add Input: THIS notebook's output -> MODE='test'.")
+    else:
+        print("NEXT: Runtime -> Change runtime type -> A100 GPU, set MODE = 'test', Run all.")
     raise StopExecution()
 elif PACK_READY:
     print(f"pack {_meta['pack_id']}: verification / class audit / split metadata are those of the FULL datasets (prepare step)")

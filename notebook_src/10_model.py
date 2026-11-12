@@ -102,7 +102,8 @@ def build_backbone_rpn(init, tl):
 
 
 # ---------------------------- text prototypes (CLIP text encoder) ----------------------------
-_TEXT_CACHE = WORK / "logs" / "clip_text.pt"   # on Drive: CLIP is loaded once, not every session
+# CLIP text embeddings are computed ONCE in the prepare step (CPU) and shipped inside the pack: GPU sessions never load CLIP
+_TEXT_CACHE = PACK_LOCAL / "clip_text.pt" if (PACK_LOCAL / "clip_text.pt").exists() else WORK / "logs" / "clip_text.pt"
 TEXT_INFO = dict(source=None, transformers=None, available=False, embedding_sha=None, error=None)
 
 
@@ -143,16 +144,17 @@ def clip_text_embed(prompts):
             TEXT_INFO["error"] = f"{type(e).__name__}: {str(e)[:200]}"
             print("[text] CLIP text encoder unavailable:", TEXT_INFO["error"]); return None
     out = torch.stack([cache[p] for p in prompts])
+    TEXT_INFO.update(cache_meta=cache.get("__meta__")) if isinstance(cache.get("__meta__"), dict) else None
     TEXT_INFO.update(available=True, embedding_sha=sha(out.numpy().round(5).tolist()), source=TEXT_INFO["source"] or C.CLIP_HF_NAME + " (cache)")
     return out
 
 
-PROMPTS = ["an x-ray scan of a {}", "a {} inside an x-ray baggage image", "a photo of a {}"]
+PROMPTS = TEXT_PROMPTS
 
 
 def text_prototypes(known):
     ps = [t.format(TEXT_NAME.get(c, c.replace("_", " "))) for c in known for t in PROMPTS]
-    thr = ["an x-ray scan of a dangerous prohibited item", "a threat object hidden in luggage", "a prohibited item"]
+    thr = THREAT_PROMPTS
     e = clip_text_embed(ps + thr)
     if e is None:
         return None

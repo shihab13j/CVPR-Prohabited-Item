@@ -7,7 +7,7 @@ if MODE == "prepare":
     raise StopExecution()   # prepare mode ends after the pack cell
 def load_results():
     rows = []
-    for rd in sorted(RUNS_DIR.glob("*")):
+    for rd in all_runs():
         if not (rd / "DONE").exists():
             continue
         cfg, dep = jload(rd / "config.json", {}), jload(rd / "deploy.json", {})
@@ -28,7 +28,7 @@ def load_results():
 
 
 RES = load_results()
-print(f"{RES.run.nunique() if len(RES) else 0} finished runs in {RUNS_DIR}")
+print(f"{RES.run.nunique() if len(RES) else 0} finished runs in {[str(d) for d in RUNS_DIRS]}")
 RES.to_csv(WORK / "tables" / f"all_results_long_{MODE}.csv", index=False)
 TAB = WORK / "tables" / MODE
 TAB.mkdir(parents=True, exist_ok=True)
@@ -213,7 +213,7 @@ save_table(pd.DataFrame(rows).T, "T8_prototype", "STPB prototype-source ablation
 rows = {}
 for t, lab in [("unk-none", "none (U = o·s_t·(1−s_k))"), ("unk-gaussian", "Gaussian feature noise"), ("unk-mixup", "feature mixup"),
                ("unk-slerp", "manifold (slerp) interpolation"), ("six_xguard", "CUS (factorized, ours)"), ("unk-cus-noent", "CUS without entropy loss")]:
-    log_ = pd.read_csv(RUNS_DIR / f"{t}_s0" / "train_log.csv") if (RUNS_DIR / f"{t}_s0" / "train_log.csv").exists() else pd.DataFrame()
+    log_ = pd.read_csv(run_path(f"{t}_s0") / "train_log.csv") if (run_path(f"{t}_s0") / "train_log.csv").exists() else pd.DataFrame()
     rows[lab] = {"SIXray known AP50": val(t, "sixray", "AP50"), "PIDray U-AP50": val(t, "pidray", "U_AP50"), "PIDray U-R50": val(t, "pidray", "U_R50"),
                  "HiXray U-AP50": val(t, "hixray", "U_AP50"), "locAUROC": val(t, "pidray", "locAUROC"),
                  "synthetic max-known cos": f"{log_.synth_max_known_cos.dropna().iloc[-5:].mean():.3f}" if "synth_max_known_cos" in log_ and log_.synth_max_known_cos.notna().any() else "n/a",
@@ -241,9 +241,9 @@ for t in ["six_base", "six_xguard"]:
 save_table(pd.DataFrame(rows).T, "T11_seeds", "Mean ± SD over independent seeds.")
 rows = {}
 for t in ["sixray"] + TG:
-    pa, pb = RUNS_DIR / "six_base_s0" / f"preds_{t}.pkl", RUNS_DIR / "six_xguard_s0" / f"preds_{t}.pkl"
+    pa, pb = run_path("six_base_s0") / f"preds_{t}.pkl", run_path("six_xguard_s0") / f"preds_{t}.pkl"
     if pa.exists() and pb.exists():
-        known = jload(RUNS_DIR / "six_xguard_s0" / "config.json")["known"]
+        known = jload(run_path("six_xguard_s0") / "config.json")["known"]
         rec_t = eval_set(t, True)
         for metric in ["AP50", "U_AP50"]:
             ci = paired_bootstrap(load_preds(pa, rec_t)[0], load_preds(pb, rec_t)[0], rec_t, known, metric)

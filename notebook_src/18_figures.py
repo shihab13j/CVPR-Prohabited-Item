@@ -6,6 +6,7 @@
 # ==============================================================================
 if MODE == "prepare":
     raise StopExecution()   # prepare mode ends after the pack cell
+wait_pack_all()          # qualitative figures read test images of every dataset
 FIG = WORK / "figures" / MODE
 FIG.mkdir(parents=True, exist_ok=True)
 plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False})
@@ -26,7 +27,7 @@ def arrow(ax, x1, y1, x2, y2, c="#34495E"):
 
 
 def run_file(tag, name, seed=0):
-    p = RUNS_DIR / f"{tag}_s{seed}" / name
+    p = run_path(f"{tag}_s{seed}") / name
     return p if p.exists() else None
 
 

@@ -13,7 +13,7 @@ from sklearn.manifold import TSNE
 
 
 def load_emb(tag):
-    p = RUNS_DIR / f"{tag}_s0" / "emb.npz"
+    p = run_path(f"{tag}_s0") / "emb.npz"
     return dict(np.load(p, allow_pickle=True)) if p.exists() else None
 
 
