@@ -85,22 +85,47 @@ def resume_previous_outputs():
         print(f"[resume] copied {n} finished run folders from the previous notebook output")
 
 
+def _set_kaggle_token(tok):
+    """New-style Kaggle API token (KGAT_...): env var + ~/.kaggle/access_token (what the kaggle CLI reads)."""
+    tok = tok.strip()
+    os.environ["KAGGLE_API_TOKEN"] = tok
+    d = Path.home() / ".kaggle"; d.mkdir(parents=True, exist_ok=True)
+    (d / "access_token").write_text(tok); os.chmod(d / "access_token", 0o600)
+
+
 def kaggle_auth():
-    if os.environ.get("KAGGLE_KEY") and os.environ.get("KAGGLE_USERNAME"):
-        return
+    """Accepts BOTH Kaggle credential styles, never from the code itself:
+       new : Colab secret KAGGLE_API_TOKEN (value starts with KGAT_)
+       old : Colab secrets KAGGLE_USERNAME + KAGGLE_KEY, or MyDrive/xguard/kaggle.json"""
+    if os.environ.get("KAGGLE_API_TOKEN") or (os.environ.get("KAGGLE_KEY") and os.environ.get("KAGGLE_USERNAME")):
+        return "environment"
+    secrets = {}
     try:
         from google.colab import userdata
-        os.environ["KAGGLE_USERNAME"] = userdata.get("KAGGLE_USERNAME")
-        os.environ["KAGGLE_KEY"] = userdata.get("KAGGLE_KEY")
-        return
+        for name in ["KAGGLE_API_TOKEN", "KAGGLE_USERNAME", "KAGGLE_KEY"]:
+            try:
+                v = userdata.get(name)
+                if v:
+                    secrets[name] = v
+            except Exception:
+                pass
     except Exception:
         pass
+    tok = secrets.get("KAGGLE_API_TOKEN") or (secrets.get("KAGGLE_KEY") if str(secrets.get("KAGGLE_KEY", "")).startswith("KGAT_") else None)
+    if tok:
+        _set_kaggle_token(tok); return "Colab secret (API token)"
+    if secrets.get("KAGGLE_USERNAME") and secrets.get("KAGGLE_KEY"):
+        os.environ["KAGGLE_USERNAME"], os.environ["KAGGLE_KEY"] = secrets["KAGGLE_USERNAME"], secrets["KAGGLE_KEY"]
+        return "Colab secrets (username + key)"
     for p in [Path(DRIVE_DIR) / "kaggle.json", Path.home() / ".kaggle" / "kaggle.json"]:
         if p.exists():
             d = json.load(open(p)); os.environ["KAGGLE_USERNAME"], os.environ["KAGGLE_KEY"] = d["username"], d["key"]
-            return
-    raise RuntimeError("Kaggle API key not found. Colab: key icon (Secrets) -> add KAGGLE_USERNAME and KAGGLE_KEY "
-                       "(from kaggle.com -> Settings -> API -> Create New Token), enable notebook access, re-run.")
+            return str(p)
+    if (Path.home() / ".kaggle" / "access_token").exists():
+        return "~/.kaggle/access_token"
+    raise RuntimeError("Kaggle credentials not found. Colab: key icon (Secrets) -> add a secret named KAGGLE_API_TOKEN "
+                       "whose value is your token (KGAT_...) from kaggle.com -> Settings -> API -> Create New Token, "
+                       "switch 'Notebook access' ON, then Run all again.")
 
 
 def kaggle_download(key, slug, file=None):
@@ -135,8 +160,8 @@ elif MODE == "prepare":
         if (PACK_DRIVE / "meta.pkl").exists():
             print(f"⚠️  a pack already exists at {PACK_DRIVE}. Delete that folder to rebuild it; otherwise switch MODE to 'test'.")
         print(f"free disk: {disk_free_gb('/content'):.0f} GB local, Drive folder {DRIVE_DIR}")
-        kaggle_auth()
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "kaggle"], check=False)
+        print("Kaggle credentials:", kaggle_auth())
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "kaggle"], check=False)   # new tokens need a recent CLI
         jobs = {k: v for k, v in KAGGLE_DATASETS.items() if k != "sixray-p1" or USE_SIXRAY_NEGATIVES}
         from concurrent.futures import ThreadPoolExecutor as _TPE
         par = len(jobs) if disk_free_gb("/content") > 80 else 1   # zip + extracted copy need ~2x space while unzipping
