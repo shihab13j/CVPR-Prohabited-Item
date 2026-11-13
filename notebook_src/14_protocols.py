@@ -377,7 +377,7 @@ def run_experiment(spec):
     if thr is None:
         vp, _ = infer(model, vrecs)
         thr = compute_thresholds(vp, vrecs, known); jdump(thr, rd / "thresholds.json")
-    dep = dict(train_minutes=meta.get("train_minutes"), sec_per_iter=meta.get("sec_per_iter"), init_used=meta.get("init_used"),
+    dep = dict(train_minutes=meta.get("train_minutes"), sec_per_iter=meta.get("sec_per_iter"), val_sec_per_epoch=meta.get("val_sec_per_epoch"), init_used=meta.get("init_used"),
                gpu=GPU_NAME, platform=PLATFORM, amp=str(AMP_DTYPE), batch=C.BATCH, accum=C.ACCUM)
     eval_minutes = 0.0
     for tgt in targets:

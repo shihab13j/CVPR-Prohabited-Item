@@ -129,6 +129,7 @@ def train_model(spec, run_dir, train_recs, known, val_recs, epochs):
         scaler.step(opt); scaler.update(); opt.zero_grad(set_to_none=True); gstep += 1
 
     t0 = time.time()
+    steady_s, steady_n, val_s, WARM = 0.0, 0, [], 10   # speed for the cost estimate: steady-state steps only
     model.train()
     lw = spec.get("loss_w")
     for ep in range(ep0, epochs):
@@ -136,6 +137,7 @@ def train_model(spec, run_dir, train_recs, known, val_recs, epochs):
         _rs = torch.get_rng_state(); batches = iter(loader); torch.set_rng_state(_rs)   # loader must not consume the training RNG
         run_l, pending = defaultdict(float), 0
         last_bi = it0 - 1
+        t_prev = time.time()
         for bi, (xs, ts) in enumerate(batches, start=it0):
             if bi >= ipe:
                 break
@@ -158,7 +160,11 @@ def train_model(spec, run_dir, train_recs, known, val_recs, epochs):
             for k, v in L.items():
                 if torch.is_tensor(v):
                     run_l[k] += float(v)
-            run_l["total"] += float(loss); run_l["_n"] += 1
+            run_l["total"] += float(loss); run_l["_n"] += 1          # float() synchronises -> wall time is real GPU time
+            _now = time.time()
+            if steps_total > WARM:
+                steady_s += _now - t_prev; steady_n += 1
+            t_prev = _now
             if (bi + 1) % 50 == 0 or bi + 1 == ipe:
                 n = max(1, run_l.pop("_n"))
                 msg = {k: round(v / n, 4) for k, v in run_l.items()}
@@ -180,7 +186,7 @@ def train_model(spec, run_dir, train_recs, known, val_recs, epochs):
             step(); pending = 0
         it0 = 0
         if (ep + 1) % C.VAL_EVERY == 0 or ep + 1 == epochs:
-            v = validate(model, val_recs, known)
+            _tv = time.time(); v = validate(model, val_recs, known); val_s.append(time.time() - _tv)
             vlog.append(dict(epoch=ep + 1, val_AP50=v, minutes=(time.time() - t0) / 60))
             print(f"   epoch {ep + 1}: source-val AP50 = {v:.4f}" + ("  (best)" if v > best else ""))
             if v > best or math.isnan(best):
@@ -198,7 +204,8 @@ def train_model(spec, run_dir, train_recs, known, val_recs, epochs):
                 prototype_mix=model.stpb.mix_weights() if hasattr(model, "stpb") else {},
                 text_info=dict(TEXT_INFO), nan_steps=nan_total, steps=steps_total,
                 unk_skipped=getattr(model, "unk_skipped", 0), best_val_AP50=best,
-                sec_per_iter=(time.time() - t0) / max(1, steps_total - 0))
+                sec_per_iter=(steady_s / steady_n) if steady_n >= 5 else (time.time() - t0) / max(1, steps_total),
+                val_sec_per_epoch=float(np.mean(val_s)) if val_s else None)
     jdump(meta, meta_p)
     if not C.KEEP_FULL_CKPT and ck.exists():
         ck.unlink()
