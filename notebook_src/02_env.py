@@ -139,6 +139,32 @@ def sha(obj, n=16):
     return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()[:n]
 
 
+def atomic_write(path, writer):
+    """write to <path>.tmp, then rename: a full Drive / disconnect never leaves a half-written file behind."""
+    path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        writer(tmp); os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+        raise
+
+
+def drive_free_gb():
+    """free space of the Drive account (Colab), None where unknown."""
+    try:
+        if PLATFORM == "colab" and Path("/content/drive/MyDrive").exists():
+            u = shutil.disk_usage("/content/drive/MyDrive")
+            if 1e9 < u.total < 1e14 and u.free <= u.total:        # only trust a plausible Drive quota
+                return u.free / 1e9
+    except Exception:
+        pass
+    return None
+
+
 def jdump(obj, path):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     tmp = str(path) + ".tmp"

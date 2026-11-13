@@ -49,7 +49,22 @@ def make_loader(recs, cls2id, train, seed=0, epoch=0, start=0, bs=None):
 
 
 def save_weights(model, path):
-    torch.save({k: (v.half() if v.is_floating_point() else v) for k, v in model.state_dict().items()}, path)
+    if Path(path).name == "checkpoint_last.pt":     # redundant with the resume checkpoint -> not written (saves Drive space)
+        return
+    sd = {k: (v.half() if v.is_floating_point() else v) for k, v in model.state_dict().items()}
+    atomic_write(path, lambda t: torch.save(sd, t))
+
+
+def check_resume_checkpoint(run_dir):
+    """a resume checkpoint written while Drive was full / during a disconnect may be truncated -> delete it so the run
+    restarts cleanly instead of crashing on every Run all."""
+    ck = Path(run_dir) / "checkpoint_last_full.pt"
+    if ck.exists():
+        try:
+            torch.load(ck, map_location="cpu", weights_only=False)
+        except Exception as e:
+            print(f"   ⚠️  resume checkpoint unreadable ({type(e).__name__}) -> deleted, this run restarts from epoch 0")
+            ck.unlink(missing_ok=True)
 
 
 def load_weights(spec, known, path, meta):

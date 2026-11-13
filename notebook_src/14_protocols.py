@@ -188,7 +188,7 @@ def check_stale(rd, fp):
     if old["train_fp"] != fp["train_fp"]:
         dst = RUNS_DIR / "_stale" / f"{rd.name}_{time.strftime('%Y%m%d-%H%M%S')}"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(rd), str(dst))
+        shutil.move(str(rd), str(dst)); strip_heavy(dst)        # keep only its logs: saves Drive space
         print(f"   ♻️  training inputs/code changed -> old run moved to {dst} and retrained")
     elif old["eval_fp"] != fp["eval_fp"]:
         for f in list(rd.glob("preds_*.pkl")) + list(rd.glob("metrics_*.json")) + list(rd.glob("curves_*.json")) + \
@@ -341,8 +341,23 @@ def write_run_artifacts(rd, spec, fp, known):
 
 
 def load_preds(pf, recs):
-    d, sp = pickle.load(open(pf, "rb"))
+    try:
+        d, sp = pickle.load(open(pf, "rb"))
+    except Exception as e:          # half-written file (full Drive / disconnect) -> predictions are recomputed
+        print(f"   ⚠️  {pf.name} unreadable ({type(e).__name__}) -> recomputing"); pf.unlink(missing_ok=True)
+        return None, None
     return [d.get(r["uid"]) for r in recs], sp
+
+
+def strip_heavy(rd, patterns=("*.pt", "*.pkl", "*.tmp")):
+    """delete weights / raw predictions of a folder that is kept only for its logs (test runs, stale runs)."""
+    n = 0
+    for f in [f for pat in patterns for f in Path(rd).rglob(pat)]:
+        try:
+            n += f.stat().st_size; f.unlink()
+        except Exception:
+            pass
+    return n / 1e9
 
 
 def run_experiment(spec):
@@ -372,6 +387,7 @@ def run_experiment(spec):
         model, meta = run_ultralytics(spec, train_recs, known, rd, 1 if C.TEST_ITERS else spec["epochs"]), dict(init_used=spec["weights"])
         jdump(meta, rd / "train_meta.json")
     else:
+        check_resume_checkpoint(rd)
         model, meta = train_model(spec, rd, train_recs, known, vrecs, spec["epochs"])
     thr = jload(rd / "thresholds.json")
     if thr is None:
@@ -385,11 +401,11 @@ def run_experiment(spec):
         pf = rd / f"preds_{tgt}.pkl"
         wait_pack(tgt)
         te = time.time()
-        if pf.exists():
-            preds, sp = load_preds(pf, recs)
-        else:
+        preds, sp = load_preds(pf, recs) if pf.exists() else (None, None)
+        if preds is None:
             preds, sp = infer(model, recs)
-            pickle.dump(({r["uid"]: p for r, p in zip(recs, preds)}, sp), open(pf, "wb"))
+            _d = ({r["uid"]: p for r, p in zip(recs, preds)}, sp)
+            atomic_write(pf, lambda t: pickle.dump(_d, open(t, "wb")))
         eval_minutes += (time.time() - te) / 60
         dep.setdefault("fps", sp["fps"]); dep.setdefault("ms_per_img", sp["ms_per_img"]); dep.setdefault("eval_images", 0)
         dep["eval_images"] += len(recs)
@@ -423,7 +439,9 @@ def run_experiment(spec):
         wait_pack_all()
         e = extract_embeddings(model, 40 if C.TEST_ITERS else 150)
         if e is not None:
-            np.savez_compressed(rd / "emb.npz", **{k: v for k, v in e.items() if v is not None})
+            atomic_write(rd / "emb.npz", lambda t: np.savez_compressed(open(t, "wb"), **{k: v for k, v in e.items() if v is not None}))
+    if MODE == "test":
+        strip_heavy(rd, ("*.pt", "*.tmp"))   # test runs: weights not needed (predictions kept for the test tables)
     (rd / "DONE").write_text(f"{(time.time() - t0) / 60:.1f} min")
     del model; gc.collect()
     if DEVICE.type == "cuda":

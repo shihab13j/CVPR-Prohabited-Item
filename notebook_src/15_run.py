@@ -38,6 +38,29 @@ def pilot_check():
     return res
 
 
+def drive_guard(need_gb):
+    """stop BEFORE a run if Drive is almost full: a full Drive breaks checkpoint writes and wastes GPU time."""
+    free = drive_free_gb()
+    if free is None or free >= need_gb:
+        return True
+    print(f"⛔ Google Drive has only {free:.1f} GB free (need ≥ {need_gb} GB). Free space: delete MyDrive/xguard/work/runs_test, "
+          "then drive.google.com -> Trash -> Empty trash. Then Run all again (finished runs are kept).")
+    return False
+
+
+if MODE == "full":
+    _freed = 0.0
+    for _d in [WORK / "runs_test"] + [RUNS_DIR / "_stale", WORK / "runs_test" / "_stale"]:
+        if _d.exists():
+            _freed += strip_heavy(_d) if _d.name == "_stale" else strip_heavy(_d, ("*.pt", "*.tmp"))
+    _freed += strip_heavy(RUNS_DIR, ("*.tmp",))
+    _free = drive_free_gb()
+    print(f"Drive: {_freed:.2f} GB of test / stale weights removed" + (f"; {_free:.1f} GB free" if _free is not None else "")
+          + " (deleted files sit in the Drive trash until it is emptied)")
+    if not drive_guard(C.MIN_DRIVE_GB):
+        release_runtime("Google Drive is full")
+        raise StopExecution()
+
 PILOT = None
 _gate_on = MODE == "full" and C.PILOT_GATE and not C.PILOT_FORCE and \
     any(s["group"] == "core" and s["seed"] == 0 for s in SELECTED)
@@ -48,6 +71,8 @@ for spec in SELECTED:
             print("⛔ pilot not passed -> the remaining runs are NOT started, so no GPU time is wasted.\n"
                   "   Send me the PILOT line above (logs/pilot_check.json). Set C.PILOT_FORCE = True only to continue anyway.")
             break
+    if MODE == "full" and not drive_guard(C.MIN_DRIVE_GB):
+        break
     if time_left_h() < 0.5:
         print(f"⏱  {elapsed_h():.1f} h used -> stopping. Re-run the notebook to continue (finished runs are kept on Drive).")
         break
