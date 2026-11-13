@@ -86,6 +86,14 @@ if failed:
 # CLIP text integrity (needed by STPB 't'): embeddings present, version + hash recorded
 _tp = text_prototypes(["knife", "gun"])
 TESTS["clip_text_available"] = _tp is not None
+if _tp is not None:
+    TESTS["clip_text_shapes"] = _tp["cls"].dim() == 2 and _tp["threat"].dim() == 1 and _tp["cls"].shape[1] == _tp["threat"].shape[0]
+    assert TESTS["clip_text_shapes"], f"CLIP text prototypes have wrong shapes {tuple(_tp['cls'].shape)} / {tuple(_tp['threat'].shape)}"
+# the text path of STPB must work even where no CLIP is available (synthetic 512-d text features)
+_st = STPB(["knife", "gun"], 32, "vta", dict(cls=F.normalize(torch.randn(2, 512), dim=-1), threat=F.normalize(torch.randn(512), dim=0)))
+_lg = _st.logits(torch.randn(5, 32)); _tp_ = _st.threat_proto()
+TESTS["stpb_text_path"] = tuple(_lg.shape) == (5, 2) and tuple(_tp_.shape) == (32,)
+assert TESTS["stpb_text_path"], "STPB text path broken"
 TESTS["clip_text_info"] = dict(TEXT_INFO)
 print("CLIP text prototypes:", "available" if _tp is not None else f"UNAVAILABLE ({TEXT_INFO['error']})")
 if C.REQUIRE_TEXT and _tp is None:

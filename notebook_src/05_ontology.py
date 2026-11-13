@@ -134,3 +134,29 @@ THREAT_PROMPTS = ["an x-ray scan of a dangerous prohibited item", "a threat obje
 
 def all_text_prompts():
     return [t.format(TEXT_NAME.get(c, c.replace("_", " "))) for c in GLOBAL_ORDER for t in TEXT_PROMPTS] + THREAT_PROMPTS
+
+
+def clip_encode_text(model, tokenizer, prompts, batch=64):
+    """One L2-normalised CLIP text embedding per prompt, independent of the transformers version:
+    text_model -> pooled (EOS) output -> text_projection. (get_text_features returns a per-TOKEN tensor in some
+    transformers versions, which silently produced (tokens x 512) "embeddings".)"""
+    import torch, torch.nn.functional as F
+    outs = []
+    with torch.no_grad():
+        for i in range(0, len(prompts), batch):
+            t = tokenizer(prompts[i:i + batch], padding=True, return_tensors="pt")
+            o = model.text_model(input_ids=t["input_ids"], attention_mask=t.get("attention_mask"))
+            pooled = o.pooler_output if getattr(o, "pooler_output", None) is not None else o[1]
+            e = model.text_projection(pooled)
+            assert e.dim() == 2 and e.shape[0] == len(prompts[i:i + batch]), f"bad CLIP text output {tuple(e.shape)}"
+            outs.append(F.normalize(e.float(), dim=-1))
+    return torch.cat(outs)
+
+
+def valid_text_cache(cache):
+    """Keep only well-formed entries (1-D vectors of the same size)."""
+    vecs = {k: v for k, v in cache.items() if k != "__meta__" and torch.is_tensor(v) and v.dim() == 1}
+    if vecs:
+        d = Counter(v.shape[0] for v in vecs.values()).most_common(1)[0][0]
+        vecs = {k: v for k, v in vecs.items() if v.shape[0] == d}
+    return vecs

@@ -41,14 +41,7 @@ def precompute_text_and_weights():
         from transformers import CLIPModel, CLIPTokenizer
         prompts = all_text_prompts()
         tok, m = CLIPTokenizer.from_pretrained(C.CLIP_HF_NAME), CLIPModel.from_pretrained(C.CLIP_HF_NAME).eval()
-        cache = {}
-        with torch.no_grad():
-            for i in range(0, len(prompts), 64):
-                e = m.get_text_features(**tok(prompts[i:i + 64], padding=True, return_tensors="pt"))
-                if not torch.is_tensor(e):
-                    e = e.text_embeds if getattr(e, "text_embeds", None) is not None else e[0]
-                for p_, v in zip(prompts[i:i + 64], F.normalize(e.float(), dim=-1)):
-                    cache[p_] = v
+        cache = dict(zip(prompts, clip_encode_text(m, tok, prompts)))
         cache["__meta__"] = dict(model=C.CLIP_HF_NAME, transformers=transformers.__version__, n=len(prompts))
         torch.save(cache, PACK_DRIVE / "clip_text.pt")
         print(f"   CLIP text embeddings for {len(prompts)} prompts cached in the pack")

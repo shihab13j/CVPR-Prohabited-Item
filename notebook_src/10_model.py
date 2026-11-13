@@ -120,7 +120,11 @@ def _as_text_tensor(e):
 
 
 def clip_text_embed(prompts):
-    cache = torch.load(_TEXT_CACHE) if _TEXT_CACHE.exists() else {}
+    raw = torch.load(_TEXT_CACHE) if _TEXT_CACHE.exists() else {}
+    cache = valid_text_cache(raw)
+    bad = len([k for k in raw if k != "__meta__"]) - len(cache)
+    if bad:
+        print(f"[text] {bad} malformed cached CLIP embeddings (old pack) -> recomputing once")
     todo = [p for p in prompts if p not in cache]
     if todo:
         src = C.CLIP_HF_NAME if INTERNET or os.path.isdir(C.CLIP_HF_NAME) else None
@@ -132,19 +136,23 @@ def clip_text_embed(prompts):
             from transformers import CLIPModel, CLIPTokenizer
             tok, m = CLIPTokenizer.from_pretrained(src), CLIPModel.from_pretrained(src).eval()
             with torch.no_grad():
-                for i in range(0, len(todo), 64):
-                    t = tok(todo[i:i + 64], padding=True, return_tensors="pt")
-                    e = _as_text_tensor(m.get_text_features(**t))
-                    for p, v in zip(todo[i:i + 64], F.normalize(e.float(), dim=-1)):
-                        cache[p] = v
-            torch.save(cache, _TEXT_CACHE)
+                # recompute EVERY prompt the cache should hold, so the repaired cache is complete
+                full = sorted(set(todo) | set(all_text_prompts()))
+                cache.update(zip(full, clip_encode_text(m, tok, full)))
+            meta = dict(model=src, transformers=transformers.__version__, n=len(cache), repaired=bool(bad))
+            torch.save({**cache, "__meta__": meta}, _TEXT_CACHE)
+            try:                                   # write the repaired cache back into the pack on Drive
+                if PACK_DRIVE.exists() and PACK_DRIVE != _TEXT_CACHE.parent:
+                    torch.save({**cache, "__meta__": meta}, PACK_DRIVE / "clip_text.pt")
+            except Exception:
+                pass
             TEXT_INFO.update(source=src, transformers=transformers.__version__)
             del m
         except Exception as e:
             TEXT_INFO["error"] = f"{type(e).__name__}: {str(e)[:200]}"
             print("[text] CLIP text encoder unavailable:", TEXT_INFO["error"]); return None
     out = torch.stack([cache[p] for p in prompts])
-    TEXT_INFO.update(cache_meta=cache.get("__meta__")) if isinstance(cache.get("__meta__"), dict) else None
+    TEXT_INFO.update(cache_meta=raw.get("__meta__")) if isinstance(raw.get("__meta__"), dict) else None
     TEXT_INFO.update(available=True, embedding_sha=sha(out.numpy().round(5).tolist()), source=TEXT_INFO["source"] or C.CLIP_HF_NAME + " (cache)")
     return out
 
@@ -158,6 +166,7 @@ def text_prototypes(known):
     e = clip_text_embed(ps + thr)
     if e is None:
         return None
+    assert e.dim() == 2, f"CLIP text embeddings must be (prompts x dim), got {tuple(e.shape)}"
     cls = F.normalize(e[:len(ps)].view(len(known), len(PROMPTS), -1).mean(1), dim=-1)
     return dict(cls=cls, threat=F.normalize(e[len(ps):].mean(0), dim=-1))
 
