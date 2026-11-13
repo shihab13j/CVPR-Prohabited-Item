@@ -30,4 +30,4 @@ if todo:
 if PLATFORM == "kaggle" and MODE == "full":
     print("Kaggle: download", zp, "and put it into MyDrive/xguard/kaggle_results/ -> Colab MODE='report' merges everything.")
 if PLATFORM == "colab" and MODE == "test":
-    release_runtime("test finished — read the gates and the time estimate above, then set MODE='full'")
+    release_runtime("test finished — read the gates and the time estimate above, if the test passed, just Connect a GPU runtime and Run all again: MODE 'auto' starts the full experiments")
