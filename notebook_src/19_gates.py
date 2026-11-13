@@ -88,4 +88,8 @@ display(GATE_DF)
 n_fail = (GATE_DF.status == "FAIL").sum()
 print(f"\n{'✅ all gates passed' if n_fail == 0 else f'❌ {n_fail} gate(s) FAILED'} (MODE={MODE})")
 if MODE == "test":
-    print("If every gate is PASS (evidence = WARN in test mode is expected), set MODE='full', choose TIERS, Run all.")
+    if n_fail == 0:
+        jdump(dict(passed=time.strftime("%Y-%m-%d %H:%M"), gates=GATES), WORK / "logs" / "test_passed.json")
+        print("✅ test passed -> next time you press Run all on a GPU runtime, MODE 'auto' starts the FULL experiments.")
+    else:
+        print("❌ test did not pass -> MODE 'auto' will run the test again; send me the gate table above.")

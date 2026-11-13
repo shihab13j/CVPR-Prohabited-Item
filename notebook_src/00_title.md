@@ -2,13 +2,18 @@
 
 One notebook, two platforms: **Tier 1 on Colab Pro (A100)** and **Tiers 2–3 on Kaggle (free GPU)**. Everything that does not need a GPU happens on a CPU runtime, so no GPU time is spent on downloads, audits, CLIP loading or tables.
 
-## Colab Pro (Tier 1: core with 3 seeds + component ablation)
-| Step | Runtime | Config | What happens |
-|---|---|---|---|
-| 1 | **CPU** | `MODE="prepare"` | Downloads the Kaggle mirrors once (add the Colab secrets `KAGGLE_USERNAME` and `KAGGLE_KEY` first). Then it verifies the data, runs the leakage audit, and pre-computes the CLIP text embeddings and the COCO weights. Output is a compact pack in `MyDrive/xguard/pack_v2`. |
-| 2 | **A100** | `MODE="test"` | All tier-1 code paths on real data with a few iterations, the unit tests and the resume test. It prints the measured **GPU-hours and compute units** for tier 1, then **releases the runtime by itself**. |
-| 3 | **A100** | `MODE="full"` | Tier 1. SIXray is unpacked first and training starts right away; the other test sets unpack in the background. After each epoch everything is saved to Drive. When the selected runs finish, or if the GPU is idle for 20 minutes, the runtime is **released automatically**. After a disconnect, choose *Run all* again; finished runs are skipped. |
-| 4 | **CPU** | `MODE="report"` | Put the Kaggle `xguard_results_full.zip` into `MyDrive/xguard/kaggle_results/`. This step merges everything into Tables T0–T14, Figures 1–8 and the release gates, without any GPU cost. |
+## Colab Pro (Tier 1: core with 3 seeds + component ablation): `MODE = "auto"`, so you never edit the code
+You only choose the **runtime type** and click **Run all**. The notebook decides which step to run:
+
+| You open | Data pack on Drive? | It runs |
+|---|---|---|
+| **CPU** runtime | no | **prepare**: Kaggle download → verification → leakage audit → pack on Drive (add the Colab secrets `KAGGLE_USERNAME` and `KAGGLE_KEY` first) |
+| **A100** runtime | yes, test not passed yet | **test**: every tier-1 code path on real data, plus the GPU-hours / compute-unit estimate. The runtime is released at the end. |
+| **A100** runtime | yes, test passed | **full**: the tier-1 experiments. Resumable: after a disconnect, just click Run all again. The runtime is released when the work is done or after 20 idle minutes. |
+| **CPU** runtime | yes | **report**: merges Colab + Kaggle results into tables, figures and gates |
+| **A100** runtime | **no** | stops at once and **releases the GPU** (prepare must run on a CPU runtime) |
+
+If an error ever stops the notebook: **Runtime → Disconnect and delete runtime** releases the GPU immediately.
 
 ## Kaggle (Tiers 2–3: LOCO first, then the supporting ablations, baselines, zero-shot, in-domain, LODO, encoders, YOLO / RT-DETR)
 1. **CPU session.** Add Input: `khanhbtq99/sixray`, `witsarutsarai/sixray-p1`, `banan41k/xray-contraband-detection`, `newashish/hixray`, `alirzaei/opixray-yolo`, and optionally your OPIXray OL lists. Set `MODE="prepare"` and choose *Save & Run All*. The pack is written to the output.

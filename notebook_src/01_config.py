@@ -25,8 +25,11 @@ CODE_VERSION = "xguard-v2.0"          # bump when you change model/training code
 #   "test"    : GPU. Every stage on real data with a few iterations + measured time / compute-unit estimate.
 #   "full"    : GPU. The real experiments of this platform's tiers (resumable, fingerprinted).
 #   "report"  : CPU. Merges Colab + Kaggle results -> all tables, figures, release gates (no GPU cost).
+#   "auto" (default) -- just pick the runtime type and press Run all:
+#        no pack yet + CPU  -> prepare          no pack yet + GPU -> stop at once and RELEASE the GPU
+#        pack + GPU, test not passed -> test    pack + GPU, test passed -> full          pack + CPU -> report
 # ------------------------------------------------------------------------------
-MODE = "test"
+MODE = "auto"          # "auto" decides by itself (see the table below); or force "prepare" / "test" / "full" / "report"
 TIERS = None           # None = this platform's default (Colab [1], Kaggle [2, 3]); or e.g. [2]
 SMOKE = os.environ.get("XGUARD_SMOKE", "0") == "1"   # tiny CPU self-test used by the author; leave it alone
 if os.environ.get("XGUARD_MODE"):
@@ -82,7 +85,7 @@ if PLATFORM == "colab":
 elif PLATFORM == "kaggle":
     INPUT_ROOT = "/kaggle/input"
     PACK_LOCAL = Path("/tmp/xguard_pack")         # /tmp: not counted in the 20 GB output limit
-    PACK_DRIVE = Path("/kaggle/working/pack_v2") if MODE == "prepare" else _find_kaggle_pack()
+    PACK_DRIVE = Path("/kaggle/working/pack_v2") if MODE == "prepare" else _find_kaggle_pack()   # auto: found pack or working
     WORK = Path("/kaggle/working/xguard")
     CACHE = Path("/tmp/xguard_cache")
     PACK_SCOPE = "all"                            # tiers 2-3 also train on PIDray / HiXray / OPIXray
@@ -107,6 +110,39 @@ EXTRA_RESULT_DIRS = [Path(DRIVE_DIR) / "kaggle_results"] if PLATFORM == "colab" 
     [Path(p) for p in glob.glob("/kaggle/input/*/colab_results")] if PLATFORM == "kaggle" else \
     [Path(p) for p in os.environ.get("XGUARD_EXTRA_RESULTS", "").split(",") if p]
 CACHE = Path(os.environ.get("XGUARD_CACHE", str(CACHE)))
+
+
+def _has_gpu():
+    try:
+        return subprocess.run(["nvidia-smi", "-L"], capture_output=True, timeout=20).returncode == 0
+    except Exception:
+        return False
+
+
+HAS_GPU = _has_gpu()
+if MODE == "auto":
+    _has_pack = (PACK_DRIVE / "meta.pkl").exists()
+    _test_ok = (WORK / "logs" / "test_passed.json").exists()
+    if not _has_pack:
+        if HAS_GPU:
+            _msg = ("No data pack yet and this runtime has a GPU. Step 1 (prepare) needs NO GPU: "
+                    "Runtime -> Change runtime type -> CPU, then Run all again. The GPU is being released now.")
+            print("⛔ " + _msg)
+            if PLATFORM == "colab":
+                from google.colab import runtime as _rt
+                _rt.unassign()
+            raise RuntimeError(_msg)
+        MODE = "prepare"
+    elif HAS_GPU:
+        MODE = "full" if _test_ok else "test"
+    else:
+        MODE = "report"
+    print(f"AUTO -> MODE = '{MODE}'  (pack: {'yes' if _has_pack else 'no'}, GPU: {'yes' if HAS_GPU else 'no'}, "
+          f"test passed: {'yes' if _test_ok else 'no'})")
+if PLATFORM == "kaggle" and MODE == "prepare":
+    PACK_DRIVE = Path("/kaggle/working/pack_v2")
+if MODE in ("test", "full") and not HAS_GPU and not SMOKE:
+    raise RuntimeError(f"MODE='{MODE}' needs a GPU. Colab: Runtime -> Change runtime type -> A100 GPU. Kaggle: Accelerator -> GPU.")
 
 # ---- datasets (Kaggle slugs used by the Colab "prepare" step) ---------------------
 #   key -> (kaggle slug, single file to download or None for the whole dataset)
