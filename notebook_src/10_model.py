@@ -519,6 +519,30 @@ class XGuard(nn.Module):
                     else:             # manifold-aware: spherical interpolation stays on the unit hypersphere
                         om = torch.acos((a_ * b_).sum(1, keepdim=True).clamp(-0.9999, 0.9999))
                         zu = (torch.sin((1 - lam) * om) * a_ + torch.sin(lam * om) * b_) / torch.sin(om).clamp(min=1e-4)
+            elif gen == "pseudo":   # ORE / OW-DETR-style: high-objectness proposals that match no label = real unknown candidates  # @fp-neutral
+                pu = []  # @fp-neutral
+                for i_ in range(B):  # @fp-neutral
+                    pr_, gb_ = proposals[i_][: C.PSEUDO_TOPK], tt_d[i_]["boxes"]  # proposals are sorted by objectness  # @fp-neutral
+                    if len(pr_) and len(gb_):  # @fp-neutral
+                        pr_ = pr_[box_iou(pr_, gb_).max(1).values < 0.3]  # @fp-neutral
+                    pu.append(pr_[: C.PSEUDO_PER_IMG].detach())  # @fp-neutral
+                if sum(len(p_) for p_ in pu) >= 2:  # @fp-neutral
+                    zu = self.head(feats_d, pu, il_d.image_sizes)["z"]  # @fp-neutral
+            elif gen == "vos":   # VOS-style: class-conditional Gaussians (shared covariance), lowest-likelihood samples  # @fp-neutral
+                q_ = getattr(self, "_vos_q", None) or {}  # @fp-neutral
+                with torch.no_grad(), torch.autocast(zr.device.type, enabled=False):  # @fp-neutral
+                    zf_ = F.normalize(zr.detach().float(), dim=-1)  # @fp-neutral
+                    for c_ in yr.unique().tolist():  # @fp-neutral
+                        q_[c_] = torch.cat([q_.get(c_, zf_[:0]), zf_[yr == c_]])[-C.VOS_QUEUE:]  # @fp-neutral
+                    self._vos_q = q_  # @fp-neutral
+                    if len(q_) >= 2 and min(len(v_) for v_ in q_.values()) >= C.VOS_MIN:  # @fp-neutral
+                        mus_ = {c_: v_.mean(0) for c_, v_ in q_.items()}  # @fp-neutral
+                        X_ = torch.cat([v_ - mus_[c_] for c_, v_ in q_.items()])  # @fp-neutral
+                        cov_ = X_.t() @ X_ / len(X_) + 1e-4 * torch.eye(X_.shape[1], device=X_.device)  # @fp-neutral
+                        mvn_ = [torch.distributions.MultivariateNormal(mus_[c_], covariance_matrix=cov_) for c_ in q_]  # @fp-neutral
+                        cand_ = torch.cat([m_.sample((C.VOS_SAMPLES,)) for m_ in mvn_])  # @fp-neutral
+                        lp_ = torch.stack([m_.log_prob(cand_) for m_ in mvn_], 1).max(1).values  # @fp-neutral
+                        zu = cand_[lp_.argsort()[:n]]  # @fp-neutral
             if zu is None or len(zu) == 0:
                 self.unk_skipped += 1
             else:

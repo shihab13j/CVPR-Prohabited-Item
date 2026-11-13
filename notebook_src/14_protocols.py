@@ -101,6 +101,8 @@ def registry():
               S("six_xguard", "core", 1, six, variant("xguard"), seed=s, full_eval=True, analyze=True, occ_sweep=True),
               # fair control for the occlusion claim: the plain detector trained with XGuard's occlusion corruption
               S("six_base-occaug", "control", 1, six, variant("base", aug="occmix"), seed=s, full_eval=True, occ_sweep=True)]
+    for g in ["pseudo", "vos", "gaussian"]:   # unknown supervision compared under the SAME protocol as XGuard (12 ep, full test)
+        R.append(S(f"unkF-{g}", "unknown_main", 1, six, variant("xguard", unk_gen=g), seed=0, full_eval=True))
     for s in C.SEEDS_ABL:
         for v in ["sira", "oer", "stpb", "sira+oer", "sira+oer+stpb", "sira+oer+stpb+cus", "xguard-sira", "xguard-oer", "xguard-cus"]:
             R.append(S(f"six_{v}", "ablation", 1, six, variant(v), seed=s, analyze=v == "sira",
@@ -142,7 +144,7 @@ def registry():
 
 
 REGISTRY = registry()
-PRIORITY = ["core", "control", "ablation", "loco", "sira_validation", "unknown_gen", "prototype", "occlusion", "baselines", "zeroshot",
+PRIORITY = ["core", "control", "unknown_main", "ablation", "loco", "sira_validation", "unknown_gen", "prototype", "occlusion", "baselines", "zeroshot",
             "indomain", "lodo", "num_sources", "encoder", "ultralytics"]
 SELECTED = sorted([s for s in REGISTRY if s["tier"] in TIERS], key=lambda s: (PRIORITY.index(s["group"]), s["seed"], s["name"]))
 if MODE == "test":   # one representative per configuration type of THIS platform's tiers exercises every code path

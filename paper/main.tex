@@ -50,7 +50,7 @@ Answering it requires more than running a detector on several test sets. The fou
 \paragraph{X-ray prohibited-item detection.}
 SIXray~\cite{miao2019sixray} introduced large-scale screening images with class imbalance; OPIXray~\cite{wei2020opixray} focused on occluded cutters with officially defined occlusion levels; HiXray~\cite{tao2021hixray} provided high-quality images of everyday items with airport-grade annotations; PIDray~\cite{wang2021pidray} added hidden items with easy/hard/hidden test subsets. Methods built on these datasets are almost always evaluated in-domain on a single dataset.
 \paragraph{Open-world and open-set detection.}
-Open-set detection must reject or flag objects of unknown classes~\cite{dhamija2020overlooked}. ORE~\cite{joseph2021ore} introduced the open-world detection task with energy-based unknown identification; OW-DETR~\cite{gupta2022owdetr} pseudo-labels high-objectness unmatched regions as unknown; OpenDet~\cite{han2022opendet} and PROB~\cite{zohar2023prob} learn compact known regions or probabilistic objectness. VOS~\cite{du2022vos} synthesizes virtual outliers in feature space. Score-based uncertainty (maximum softmax probability~\cite{hendrycks2017msp}, energy~\cite{liu2020energy}) is a common baseline. These methods have not been studied under scanner and occlusion shift.
+Open-set detection must reject or flag objects of unknown classes~\cite{dhamija2020overlooked}. ORE~\cite{joseph2021ore} introduced the open-world detection task with energy-based unknown identification; OW-DETR~\cite{gupta2022owdetr} pseudo-labels high-objectness unmatched regions as unknown; OpenDet~\cite{han2022opendet} and PROB~\cite{zohar2023prob} learn compact known regions or probabilistic objectness. VOS~\cite{du2022vos} synthesizes virtual outliers in feature space. Score-based uncertainty (maximum softmax probability~\cite{hendrycks2017msp}, energy~\cite{liu2020energy}) is a common baseline. Open-vocabulary detectors such as OWL-ViT~\cite{minderer2022owlvit} and Grounding DINO~\cite{liu2024gdino} can be prompted with arbitrary class names, and DETR-family detectors such as RT-DETR~\cite{zhao2024rtdetr} are increasingly used in place of two-stage models. These methods have not been studied under scanner and occlusion shift.
 \paragraph{Domain shift and invariance.}
 Domain-adaptive detection~\cite{chen2018dafaster} and frequency-space style transfer~\cite{yang2020fda} target appearance shift; in X-ray, appearance depends on scanner energy response and color mapping. Shortcut learning~\cite{geirhos2020shortcut} warns that an objective can be minimized by cues that do not transfer; our outlier-synthesis diagnosis is an instance.
 \paragraph{Selective prediction and data quality.}
@@ -98,7 +98,7 @@ A class is \emph{known} if it occurs in the source training set; all other annot
 % -------------------------------------------------------------------------------------
 \section{Findings: How Detectors Fail}
 \label{sec:findings}
-\paragraph{Setup.} The reference detector is Faster R-CNN~\cite{ren2015faster} with a ResNet-50 FPN~\cite{lin2017fpn} backbone initialized from COCO, trained on SIXray for 12 epochs at 800\,px (SGD, lr 0.01, batch 8, cosine schedule, bf16 on one A100). The checkpoint with the best SIXray validation AP$_{50}$ is evaluated on all test sets without further tuning. A two-stage detector was chosen for compute reasons; transformer detectors are left to future work.
+\paragraph{Setup.} The reference detector is Faster R-CNN~\cite{ren2015faster} with a ResNet-50 FPN~\cite{lin2017fpn} backbone initialized from COCO, trained on SIXray for 12 epochs at 800\,px (SGD, lr 0.01, batch 8, cosine schedule, bf16 on one A100). The checkpoint with the best SIXray validation AP$_{50}$ is evaluated on all test sets without further tuning. To check that the findings are not specific to one architecture, we also train RT-DETR-L~\cite{zhao2024rtdetr}, a DETR-family detector, on the same data for the same number of epochs, and evaluate two zero-shot open-vocabulary transformers, OWL-ViT~\cite{minderer2022owlvit} and Grounding DINO~\cite{liu2024gdino}, prompted with the known class names only.
 
 \begin{table}[t]
 \centering\small\setlength{\tabcolsep}{4pt}
@@ -116,11 +116,29 @@ U-AP$_{50}$ / U-R$_{50}$ & n/a & 1.9 / 9.4 & n/a & 0.2 / 0.0 \\
 \label{tab:shift}
 \end{table}
 
-\paragraph{F1: Accuracy collapses across scanners.} AP$_{50}$ falls from 79.6 in-domain to 48.5 on PIDray and 5.2 on OPIXray (\cref{tab:shift}). On OPIXray the exact track (9.8) is \emph{higher} than the harmonized track (5.2). Under exact names only \emph{scissors} is scored; the harmonized track also maps the four OPIXray knife types to \emph{knife}, and these are almost never detected. The same predictions therefore give opposite impressions depending on the ontology, so the ontology must be reported.
+\begin{table}[t]
+\centering\small\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+ & SIXray & PIDray & OPIXray & PIDray-hidden \\
+detector & AP$_{50}$ & AP$_{50}$ & AP$_{50}$ & U-R$_{50}$ \\
+\midrule
+Faster R-CNN R50-FPN & 79.6 & 48.5 & 5.2 & 7.7 \\
+RT-DETR-L~\cite{zhao2024rtdetr} & \pending{} & \pending{} & \pending{} & \pending{} \\
+OWL-ViT, zero-shot & \pending{} & \pending{} & \pending{} & \pending{} \\
+Grounding DINO, zero-shot & \pending{} & \pending{} & \pending{} & \pending{} \\
+\bottomrule
+\end{tabular}}
+\caption{The collapse is not specific to one architecture. Zero-shot models are prompted with the five known class names only and evaluated on a fixed subset of each test set.}
+\label{tab:detectors}
+\end{table}
+
+\paragraph{F1: Accuracy collapses across scanners.} AP$_{50}$ falls from 79.6 in-domain to 48.5 on PIDray and 5.2 on OPIXray (\cref{tab:shift}). On OPIXray the exact track (9.8) is \emph{higher} than the harmonized track (5.2). Under exact names only \emph{scissors} is scored; the harmonized track also maps the four OPIXray knife types to \emph{knife}, and these are almost never detected. The same predictions therefore give opposite impressions depending on the ontology, so the ontology must be reported. \pending{RT-DETR-L shows the same pattern (\cref{tab:detectors}): X $\rightarrow$ Y $\rightarrow$ Z AP$_{50}$.}
 
 \paragraph{F2: Unseen threats are almost never found.} Under strict one-to-one matching, the detector recovers 7.7\% of unseen-class objects in PIDray's \emph{hidden} subset and none in HiXray. Its unknown score is barely informative (PIDray locAUROC 44.6, where 50 is chance).
 
-\paragraph{F3: Occlusion removes most of the accuracy.} With 30\% of every object covered, SIXray AP$_{50}$ drops from 79.6 to 31.7; at 70\% it is 23.5 (relative degradation 0.71, \cref{tab:occ,fig:occ}).
+\paragraph{F3: Occlusion removes most of the accuracy.} With 30\% of every object covered, SIXray AP$_{50}$ drops from 79.6 to 31.7; at 70\% it is 23.5 (relative degradation 0.71, \cref{tab:occ,fig:occ}). The same trend appears on \emph{real} concealment: on PIDray's official subsets, AP$_{50}$ falls from \pending{X} (easy) to \pending{Y} (hard) and \pending{Z} (hidden, items deliberately concealed).
 
 \begin{figure}[t]
 \centering
@@ -193,11 +211,32 @@ model & risk score & realized referral & missed threats $\downarrow$ \\
 \label{tab:ref}
 \end{table}
 
+\paragraph{Is the shortcut specific to our synthesis?} We compare unknown-supervision recipes under one protocol (\cref{tab:unk}): the same detector, data, epochs and full test sets, changing only what the unknown head is trained on. We re-implement the core supervision mechanism of each family rather than the full original systems: Gaussian feature noise around known embeddings; VOS-style~\cite{du2022vos} low-likelihood samples from class-conditional Gaussians with a shared covariance; and ORE/OW-DETR-style~\cite{joseph2021ore,gupta2022owdetr} \emph{pseudo-unknowns}, \ie high-objectness proposals that overlap no annotation (IoU $<0.3$), which in cluttered bags are mostly real but unlabeled objects. \pending{Interpret: which recipes collapse (unknown loss $\approx$0, locAUROC $<$50) and whether real pseudo-unknowns avoid the shortcut.}
+
+\begin{table}[t]
+\centering\small\setlength{\tabcolsep}{2.5pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccccc}
+\toprule
+ & SIXray & PIDray-hid. & PIDray & HiXray & final \\
+unknown supervision & AP$_{50}$ & U-R$_{50}$ & locAUROC & AOSE$\downarrow$ & $\mathcal{L}_{unk}$ \\
+\midrule
+none (reference) & 79.6 & 7.7 & 44.6 & 4 & -- \\
+Gaussian noise & \pending{} & \pending{} & \pending{} & \pending{} & \pending{} \\
+VOS-style~\cite{du2022vos} & \pending{} & \pending{} & \pending{} & \pending{} & \pending{} \\
+pseudo-unknowns~\cite{joseph2021ore,gupta2022owdetr} & \pending{} & \pending{} & \pending{} & \pending{} & \pending{} \\
+factor mixing (XGuard) & 74.1 & 0.0 & 32.6 & 156 & 0.002 \\
+\bottomrule
+\end{tabular}}
+\caption{Unknown supervision under one protocol (seed 0). The last four rows share the XGuard detector and change only the samples the unknown head is trained on. locAUROC below 50 means the unknown score is inverted.}
+\label{tab:unk}
+\end{table}
+
 % -------------------------------------------------------------------------------------
 \section{Discussion and Limitations}
 \label{sec:discussion}
 \textbf{Recommendations.} (1) Report exact, harmonized and hierarchical scores separately. (2) Audit lineage and duplicates before training on mirrors of public data. (3) Never report an unknown-detection method without a localization AUROC on real unknowns: a near-zero training loss can hide an inverted score. (4) Report referral at the \emph{realized} rate on the target and recalibrate thresholds per deployment site. (5) Train with occlusion consistency, which helps the most where screening is hardest.
-\textbf{Limitations.} The SIXray source is a five-class mirror, not the canonical split. Results use one two-stage architecture; \pending{all main numbers are averaged over three seeds} and ablations use one seed. The synthetic occlusion sweep complements, but does not replace, real occlusion annotations; OPIXray occlusion-level results require the official lists. Zero-shot open-vocabulary detectors are only partly evaluated \pending{OWL-ViT~\cite{minderer2022owlvit}: U-R$_{50}$ = X}.
+\textbf{Limitations.} (i) The SIXray source is a five-class mirror with a re-drawn split, because it is the only box-annotated public copy available to us; the three target datasets use their official splits, and we release the lineage and split lists so that results can be re-run on the canonical split. (ii) Transformer detectors are evaluated closed-set (RT-DETR-L) and zero-shot (OWL-ViT, Grounding DINO); we did not train open-world transformer detectors. (iii) Unknown-supervision baselines re-implement the core mechanism of each family in a shared detector, not the full original systems. (iv) Synthetic occlusion is complemented by PIDray's real concealment subsets; OPIXray occlusion-level results require the official lists. (v) \pending{Main numbers are averaged over three seeds}; the unknown-supervision comparison uses one seed with paired bootstrap intervals.
 
 \section{Conclusion}
 CoShift-X shows that X-ray threat detectors that look strong in-domain fail on new scanners, on unseen threats and under occlusion, and that the scores meant to flag such failures lose their operating point. Occlusion-consistent training is a clear step forward; feature-space outlier synthesis is a trap that a closed-set evaluation cannot reveal. We hope that the benchmark, the audit lists and the evaluation code make these failures visible before deployment.

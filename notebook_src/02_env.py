@@ -86,7 +86,7 @@ def has_internet(timeout=3):
         return False
 
 
-INTERNET = False if SMOKE else has_internet()
+INTERNET = os.environ.get("XGUARD_INTERNET") == "1" or (False if SMOKE else has_internet())
 print("Internet:", INTERNET)
 
 try:

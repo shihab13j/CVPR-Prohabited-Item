@@ -156,6 +156,7 @@ if rows:
 rows = {}
 for t in ["six_base", "six_base-occaug", "six_oer", "six_sira+oer", "occ-cutout", "six_xguard"]:
     r = {f"OL{i}": val(t, "opixray", "hAP50", f"OL{i}") for i in (1, 2, 3)}
+    r.update({f"PIDray {sub} AP50": val(t, "pidray", "AP50", sub) for sub in ("easy", "hard", "hidden")})   # REAL concealment
     for r_ in C.OCC_SWEEP:
         r[f"synthetic occ {int(r_ * 100)}% AP50"] = val(t, "sixray", "AP50", f"occ{r_}")
     a0, a5 = val(t, "sixray", "AP50", f"occ{C.OCC_SWEEP[0]}", fmt=False), val(t, "sixray", "AP50", f"occ{C.OCC_SWEEP[-1]}", fmt=False)
@@ -165,7 +166,7 @@ save_table(pd.DataFrame(rows).T, "T5_occlusion", "P6 occlusion: official OPIXray
 
 # ---- T6 compound shift ----
 rows = {}
-for t in ["six_base", "six_base-occaug", "six_xguard", "six_gdino", "six_owlvit"]:
+for t in ["six_base", "six_base-occaug", "six_xguard", "unkF-pseudo", "unkF-vos", "unkF-gaussian", "six_rtdetr-l", "six_gdino", "six_owlvit"]:
     rows[f"PIDray-hidden, unseen classes | {NICE.get(t, t)}"] = {
         "U-AP50": val(t, "pidray", "U_AP50", "hidden"), "U-R50": val(t, "pidray", "U_R50", "hidden"),
         "miss-rate ↓": val(t, "pidray", "miss_rate", "hidden"), "FA/img ↓": val(t, "pidray", "FA_per_img", "hidden", scale=1)}
@@ -219,6 +220,20 @@ for t, lab in [("unk-none", "none (U = o·s_t·(1−s_k))"), ("unk-gaussian", "G
                  "synthetic max-known cos": f"{log_.synth_max_known_cos.dropna().iloc[-5:].mean():.3f}" if "synth_max_known_cos" in log_ and log_.synth_max_known_cos.notna().any() else "n/a",
                  "real max-known cos": f"{log_.real_max_known_cos.dropna().iloc[-5:].mean():.3f}" if "real_max_known_cos" in log_ and log_.real_max_known_cos.notna().any() else "n/a"}
 save_table(pd.DataFrame(rows).T, "T9_unknown_generation", "Synthetic-unknown strategies under the same protocol (+ known-support similarity of generated features).")
+
+# ---- T9b unknown supervision under the MAIN protocol (12 epochs, full test sets, same detector) ----
+rows = {}
+for t, lab in [("six_base", "none (detector score only)"), ("unkF-gaussian", "Gaussian feature noise"),
+               ("unkF-vos", "VOS-style low-likelihood sampling"), ("unkF-pseudo", "ORE/OW-DETR-style pseudo-unknowns"),
+               ("six_xguard", "factor mixing (XGuard)")]:
+    log_ = pd.read_csv(run_path(f"{t}_s0") / "train_log.csv") if (run_path(f"{t}_s0") / "train_log.csv").exists() else pd.DataFrame()
+    last = lambda k: (f"{log_[k].dropna().iloc[-5:].mean():.3f}" if k in log_ and log_[k].notna().any() else "n/a")
+    rows[lab] = {"SIXray AP50": val(t, "sixray", "AP50"), "PIDray AP50": val(t, "pidray", "AP50"),
+                 "PIDray-hidden U-R50": val(t, "pidray", "U_R50", "hidden"), "PIDray U-AP50": val(t, "pidray", "U_AP50"),
+                 "PIDray locAUROC": val(t, "pidray", "locAUROC"), "HiXray U-AP50": val(t, "hixray", "U_AP50"),
+                 "HiXray AOSE ↓": val(t, "hixray", "AOSE", scale=1), "final unknown loss": last("unknown"),
+                 "synthetic max-known cos": last("synth_max_known_cos"), "real max-known cos": last("real_max_known_cos")}
+save_table(pd.DataFrame(rows).T, "T9b_unknown_supervision", "Unknown supervision recipes in the same detector, 12 epochs, full test sets, seed 0.")
 
 # ---- T10 reliability / referral ----
 rows = {}

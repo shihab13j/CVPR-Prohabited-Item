@@ -168,7 +168,7 @@ MERGE_VAL_INTO_TEST = {"opixray"}   # alirzaei/opixray-yolo cut the OFFICIAL tes
 C = SimpleNamespace(
     IMG=800, EPOCHS_MAIN=12, EPOCHS_ABL=8, BATCH=8, ACCUM=1, LR=0.01, WARMUP_ITERS=500, WEIGHT_DECAY=1e-4,
     MAX_TRAIN_PER_DS=12000, MAX_VAL=600, MAX_EVAL_MAIN=None, MAX_EVAL_ABL=3000, N_NEG_TRAIN=500, N_NEG_EVAL=500,
-    SEEDS_MAIN=[0, 1, 2], SEEDS_ABL=[0], PILOT_GATE=True, PILOT_FORCE=False, DEADLINE=True, MIN_DRIVE_GB=2.0, WORKERS=min(12, os.cpu_count() or 2),
+    SEEDS_MAIN=[0, 1, 2], SEEDS_ABL=[0], PILOT_GATE=True, PILOT_FORCE=False, DEADLINE=True, PSEUDO_TOPK=100, PSEUDO_PER_IMG=8, VOS_QUEUE=1000, VOS_MIN=100, VOS_SAMPLES=1000, MIN_DRIVE_GB=2.0, WORKERS=min(12, os.cpu_count() or 2),
     INIT="coco", TRAINABLE_LAYERS=3, EMB_DIM=256, AMP=True, GRAD_CLIP=10.0,
     SCORE_THR=0.01, DETS_PER_IMG=100, UNK_DETS_PER_IMG=50, BOOTSTRAP=1000,
     USE_SEMANTIC_ALIASES=True, DUP_HAMMING=4, DUP_MAD=3.0, AUDIT_MAX_PER_DS=None, KEEP_FULL_CKPT=False,
@@ -188,10 +188,13 @@ if MODE == "test":
     C.TEST_ITERS, C.TEST_EVAL, C.TEST_VAL, C.BOOTSTRAP = 30, 120, 60, 100
     C.SEEDS_MAIN, C.SEEDS_ABL = [0], [0]
 # DEADLINE plan (paper due): most valuable runs first; anything unfinished simply stays out of the tables.
-#   1 occlusion fair control  2 is the shortcut generic? (Gaussian / VOS-style unknowns)  3-8 seeds 1-2 for mean ± SD
-#   9 zero-shot open-vocabulary detector (inference only)
-C.DEADLINE_RUNS = ["six_base_s0", "six_xguard_s0", "six_base-occaug_s0", "unk-gaussian_s0", "six_base_s1", "six_xguard_s1",
-                   "six_base-occaug_s1", "six_base_s2", "six_xguard_s2", "six_base-occaug_s2", "six_owlvit_s0"]
+#   occlusion fair control -> unknown-supervision baselines -> seed 1 -> RT-DETR -> zero-shot -> seed 2
+C.DEADLINE_RUNS = ["six_base_s0", "six_xguard_s0", "six_base-occaug_s0",
+                   "unkF-pseudo_s0", "unkF-vos_s0", "unkF-gaussian_s0",          # published unknown-supervision recipes, same protocol
+                   "six_base_s1", "six_xguard_s1", "six_base-occaug_s1",
+                   "six_rtdetr-l_s0",                                           # DETR-family closed-set detector
+                   "six_gdino_s0", "six_owlvit_s0",                             # zero-shot open-vocabulary transformers
+                   "six_base_s2", "six_xguard_s2", "six_base-occaug_s2"]
 if C.DEADLINE:
     C.PILOT_GATE = False          # the deadline plan is fixed in advance: no early stop after seed 0
 if C.REQUIRE_TEXT is None:
