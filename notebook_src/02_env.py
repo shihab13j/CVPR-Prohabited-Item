@@ -19,10 +19,19 @@ from IPython.display import display, Markdown
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 GPU_NAME = torch.cuda.get_device_name(0) if DEVICE.type == "cuda" else "cpu"
-if DEVICE.type != "cuda":
+_CPU_BF16 = DEVICE.type != "cuda" and os.environ.get("XGUARD_CPU_BF16") == "1"   # developer check only: bf16 autocast on CPU
+if DEVICE.type != "cuda" and not _CPU_BF16:
     C.AMP = False
 # A100/L4/H100 -> bfloat16 (no loss scaling needed); T4/P100/V100 -> float16 + GradScaler
-AMP_DTYPE = torch.bfloat16 if (DEVICE.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float16
+AMP_DTYPE = torch.bfloat16 if (_CPU_BF16 or (DEVICE.type == "cuda" and torch.cuda.is_bf16_supported())) else torch.float16
+if _CPU_BF16:   # emulate CUDA: these ops have no bf16/fp16 kernel on the GPU, so make them fail on CPU too
+    def _strict(fn):
+        def g(x, *a, **k):
+            if torch.is_tensor(x) and x.dtype in (torch.bfloat16, torch.float16):
+                raise RuntimeError(f"{fn.__name__}: Low precision dtypes not supported. Got {x.dtype}")
+            return fn(x, *a, **k)
+        return g
+    torch.linalg.inv, torch.quantile = _strict(torch.linalg.inv), _strict(torch.quantile)
 USE_SCALER = C.AMP and AMP_DTYPE == torch.float16
 if DEVICE.type == "cuda":
     torch.backends.cuda.matmul.allow_tf32 = True

@@ -305,11 +305,14 @@ def extract_embeddings(model, n_img=150):
             bx = [t["boxes"].to(DEVICE) for t in ts]
             if sum(len(b) for b in bx) == 0:
                 continue
+            xcf = None
+            if ds == "sixray":       # SIRA claim: same object under a different virtual scanner -> same embedding
+                random.seed(1000 + bi)
+                xcf = [scanner_counterfactual(x) for x in xs]      # fp32, outside autocast
             with torch.autocast(DEVICE.type, dtype=AMP_DTYPE, enabled=C.AMP):
                 z = model.embed_boxes(xs, bx)
-                if ds == "sixray":   # SIRA claim: same object under a different virtual scanner -> same embedding
-                    random.seed(1000 + bi)
-                    z2 = model.embed_boxes([scanner_counterfactual(x) for x in xs], bx)
+                if xcf is not None:
+                    z2 = model.embed_boxes(xcf, bx)
                     CONS += F.cosine_similarity(z.float(), z2.float(), dim=-1).cpu().tolist()
             Z.append(z.float().cpu().numpy()); D += [ds] * len(z); Y += [inv[int(l)] for t in ts for l in t["labels"]]
     if not Z:

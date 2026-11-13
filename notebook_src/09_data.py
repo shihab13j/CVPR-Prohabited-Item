@@ -84,14 +84,20 @@ def _gauss_blur(x, sigma):
 
 def _hue_rotate(x, deg):
     th = math.radians(deg); c, s = math.cos(th), math.sin(th)
-    T = torch.tensor([[0.299, 0.587, 0.114], [0.596, -0.274, -0.322], [0.211, -0.523, 0.312]], device=x.device, dtype=x.dtype)
-    R = torch.tensor([[1, 0, 0], [0, c, -s], [0, s, c]], device=x.device, dtype=x.dtype)
-    M = torch.linalg.inv(T) @ R @ T
+    # matrix maths always in fp32 (linalg.inv has no bf16/fp16 kernel), result cast back to the image dtype
+    T = torch.tensor([[0.299, 0.587, 0.114], [0.596, -0.274, -0.322], [0.211, -0.523, 0.312]], device=x.device, dtype=torch.float32)
+    R = torch.tensor([[1, 0, 0], [0, c, -s], [0, s, c]], device=x.device, dtype=torch.float32)
+    M = (torch.linalg.inv(T) @ R @ T).to(x.dtype)
     return torch.einsum("ij,jhw->ihw", M, x)
 
 
 def scanner_counterfactual(x, strength=1.0):
-    """T_phi: one random virtual scanner per image. x: CHW in [0,1]."""
+    """T_phi: one random virtual scanner per image. x: CHW in [0,1]. Always computed in fp32 outside autocast."""
+    with torch.autocast(x.device.type, enabled=False):
+        return _scanner_counterfactual(x.float(), strength).to(x.dtype)
+
+
+def _scanner_counterfactual(x, strength=1.0):
     u = lambda a, b: a + (b - a) * random.random()
     s = strength
     x = x.clamp(0, 1) ** u(1 - 0.4 * s, 1 + 0.6 * s)                                   # attenuation curve
@@ -108,6 +114,11 @@ def scanner_counterfactual(x, strength=1.0):
 
 
 def rgb_jitter(x):
+    with torch.autocast(x.device.type, enabled=False):
+        return _rgb_jitter(x.float()).to(x.dtype)
+
+
+def _rgb_jitter(x):
     u = lambda a, b: a + (b - a) * random.random()
     g = x.mean(0, keepdim=True); x = g + (x - g) * u(0.7, 1.3)
     m = x.mean(); x = (x - m) * u(0.8, 1.2) + m + u(-0.1, 0.1)
