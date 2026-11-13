@@ -98,7 +98,9 @@ def registry():
     R, six, X = [], ["sixray"], (lambda **k: variant("xguard", **k))
     for s in C.SEEDS_MAIN:      # ---------------- tier 1 (Colab A100)
         R += [S("six_base", "core", 1, six, variant("base"), seed=s, full_eval=True, analyze=True, occ_sweep=True),
-              S("six_xguard", "core", 1, six, variant("xguard"), seed=s, full_eval=True, analyze=True, occ_sweep=True)]
+              S("six_xguard", "core", 1, six, variant("xguard"), seed=s, full_eval=True, analyze=True, occ_sweep=True),
+              # fair control for the occlusion claim: the plain detector trained with XGuard's occlusion corruption
+              S("six_base-occaug", "control", 1, six, variant("base", aug="occmix"), seed=s, full_eval=True, occ_sweep=True)]
     for s in C.SEEDS_ABL:
         for v in ["sira", "oer", "stpb", "sira+oer", "sira+oer+stpb", "sira+oer+stpb+cus", "xguard-sira", "xguard-oer", "xguard-cus"]:
             R.append(S(f"six_{v}", "ablation", 1, six, variant(v), seed=s, analyze=v == "sira",
@@ -140,7 +142,7 @@ def registry():
 
 
 REGISTRY = registry()
-PRIORITY = ["core", "ablation", "loco", "sira_validation", "unknown_gen", "prototype", "occlusion", "baselines", "zeroshot",
+PRIORITY = ["core", "control", "ablation", "loco", "sira_validation", "unknown_gen", "prototype", "occlusion", "baselines", "zeroshot",
             "indomain", "lodo", "num_sources", "encoder", "ultralytics"]
 SELECTED = sorted([s for s in REGISTRY if s["tier"] in TIERS], key=lambda s: (PRIORITY.index(s["group"]), s["seed"], s["name"]))
 if MODE == "test":   # one representative per configuration type of THIS platform's tiers exercises every code path
@@ -149,6 +151,10 @@ if MODE == "test":   # one representative per configuration type of THIS platfor
                  "six_fcos", "six_owlvit", "six_gdino-oracle", "in-opixray_xguard", "six_yolo11s", "src2"}          # tier 2-3
     keep_tags |= {f"loco-{LOCO_CLASSES[0]}_base", f"loco-{LOCO_CLASSES[0]}_xguard"} if LOCO_CLASSES else set()
     SELECTED = [s for s in SELECTED if s["tag"] in keep_tags and s["seed"] == 0]
+if MODE == "full" and C.DEADLINE:   # deadline plan: the runs that strengthen the paper most, in order of value
+    _by = {s["name"]: s for s in REGISTRY}
+    SELECTED = [_by[n] for n in C.DEADLINE_RUNS if n in _by]
+    print("DEADLINE plan:", [s["name"] for s in SELECTED])
 if MODE == "report":
     SELECTED = []
 print(f"{len(REGISTRY)} experiments registered; {len(SELECTED)} selected for MODE={MODE}, TIERS={TIERS}")
@@ -160,7 +166,9 @@ def _src_hash(objs):
     parts = []
     for o in objs:
         try:
-            parts.append(inspect.getsource(o))
+            # lines tagged "@fp-neutral" only add NEW options; they do not change existing configurations,
+            # so they are left out of the hash and finished runs stay valid
+            parts.append("".join(l for l in inspect.getsource(o).splitlines(keepends=True) if "@fp-neutral" not in l))
         except Exception:
             parts.append(getattr(o, "__name__", str(o)))
     return sha(parts)

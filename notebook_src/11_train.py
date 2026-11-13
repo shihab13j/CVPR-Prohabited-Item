@@ -31,6 +31,8 @@ def prepare_views(xs, ts, m):
         xs = [a if random.random() < 0.5 else b for a, b in zip(xs, fourier_mix(xs))]
     elif aug == "cutout":
         xs, _ = synth_occlusion(xs, ts, p=C.OCC_P, frac=C.OCC_FRAC, mode="cutout")
+    elif aug == "occmix":   # control: XGuard's occlusion corruption as plain augmentation  # @fp-neutral
+        xs, _ = synth_occlusion(xs, ts, p=C.OCC_P, frac=C.OCC_FRAC, mode="mixed")  # @fp-neutral
     if not (m.get("sira_cf") or m.get("occ")):
         return xs, None, None
     x2 = [scanner_counterfactual(x) for x in xs] if m.get("sira_cf") else [x.clone() for x in xs]

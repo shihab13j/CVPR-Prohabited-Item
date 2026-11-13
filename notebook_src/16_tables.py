@@ -80,8 +80,8 @@ def save_table(df, name, caption):
 NICE = {"six_base": "Faster R-CNN R50-FPN (base)", "six_fcos": "FCOS", "six_retinanet": "RetinaNet", "six_yolo11s": "YOLO11-s",
         "six_rtdetr-l": "RT-DETR-L", "six_owlvit": "OWL-ViT (zero-shot, name-free)", "six_gdino": "Grounding-DINO (zero-shot, name-free)",
         "six_owlvit-oracle": "OWL-ViT (ORACLE vocabulary)†", "six_gdino-oracle": "Grounding-DINO (ORACLE vocabulary)†",
-        "six_xguard": "XGuard (ours)"}
-MAIN = ["six_base", "six_fcos", "six_retinanet", "six_yolo11s", "six_rtdetr-l", "six_owlvit", "six_gdino", "six_owlvit-oracle",
+        "six_xguard": "XGuard (composite)", "six_base-occaug": "Faster R-CNN + occlusion aug (control)"}
+MAIN = ["six_base", "six_base-occaug", "six_fcos", "six_retinanet", "six_yolo11s", "six_rtdetr-l", "six_owlvit", "six_gdino", "six_owlvit-oracle",
         "six_gdino-oracle", "six_xguard"]
 TG = [t for t in ["pidray", "opixray", "hixray", "clcxray"] if t in AVAILABLE]
 
@@ -154,7 +154,7 @@ if rows:
 
 # ---- T5 occlusion robustness ----
 rows = {}
-for t in ["six_base", "six_oer", "six_sira+oer", "occ-cutout", "six_xguard"]:
+for t in ["six_base", "six_base-occaug", "six_oer", "six_sira+oer", "occ-cutout", "six_xguard"]:
     r = {f"OL{i}": val(t, "opixray", "hAP50", f"OL{i}") for i in (1, 2, 3)}
     for r_ in C.OCC_SWEEP:
         r[f"synthetic occ {int(r_ * 100)}% AP50"] = val(t, "sixray", "AP50", f"occ{r_}")
@@ -165,7 +165,7 @@ save_table(pd.DataFrame(rows).T, "T5_occlusion", "P6 occlusion: official OPIXray
 
 # ---- T6 compound shift ----
 rows = {}
-for t in ["six_base", "six_xguard", "six_gdino", "six_owlvit"]:
+for t in ["six_base", "six_base-occaug", "six_xguard", "six_gdino", "six_owlvit"]:
     rows[f"PIDray-hidden, unseen classes | {NICE.get(t, t)}"] = {
         "U-AP50": val(t, "pidray", "U_AP50", "hidden"), "U-R50": val(t, "pidray", "U_R50", "hidden"),
         "miss-rate ↓": val(t, "pidray", "miss_rate", "hidden"), "FA/img ↓": val(t, "pidray", "FA_per_img", "hidden", scale=1)}
@@ -235,7 +235,7 @@ save_table(pd.DataFrame(rows).T.fillna(""), "T10_reliability", "Risk scores comp
 
 # ---- T11 multi-seed statistics + paired bootstrap ----
 rows = {}
-for t in ["six_base", "six_xguard"]:
+for t in ["six_base", "six_base-occaug", "six_xguard"]:
     n = RES[(RES.tag == t)].seed.nunique() if len(RES) else 0
     rows[f"{NICE.get(t, t)} (n={n} seeds)"] = {f"{g} {m}": val(t, g, m) for g in ["sixray"] + TG for m in ["AP50", "U_AP50"]}
 save_table(pd.DataFrame(rows).T, "T11_seeds", "Mean ± SD over independent seeds.")

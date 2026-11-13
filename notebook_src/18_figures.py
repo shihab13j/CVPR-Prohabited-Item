@@ -13,6 +13,12 @@ plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.righ
 
 
 def savefig(name):
+    fig_ = plt.gcf()           # paper figures carry their caption in LaTeX: drop the "Fig. N ..." titles from the image
+    if getattr(fig_, "_suptitle", None) is not None and fig_._suptitle.get_text().startswith("Fig."):
+        fig_._suptitle.set_text("")
+    for ax_ in fig_.axes:
+        if ax_.get_title().startswith("Fig."):
+            ax_.set_title("")
     plt.savefig(FIG / f"{name}.png", dpi=200, bbox_inches="tight"); plt.savefig(FIG / f"{name}.pdf", bbox_inches="tight")
     plt.show(); plt.close()
 
@@ -157,7 +163,7 @@ if thr_x and cfg_x and cfg_b:
 
 # ---------- Fig. 4 occlusion robustness curves ----------
 fig, ax = plt.subplots(figsize=(5, 3.6)); any_ = False
-for t in ["six_base", "six_oer", "six_sira+oer", "occ-cutout", "six_xguard"]:
+for t in ["six_base", "six_base-occaug", "six_oer", "six_sira+oer", "occ-cutout", "six_xguard"]:
     f = run_file(t, "metrics_occsweep.json")
     if f:
         d = jload(f); xs = sorted(float(k) for k in d)
