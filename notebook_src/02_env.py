@@ -2,10 +2,7 @@
 # 1. ENVIRONMENT, IMPORTS, GPU SETTINGS, HELPERS
 # ==============================================================================
 if PLATFORM == "colab":
-    from google.colab import drive
-    drive.mount("/content/drive")
-    for sub in ["runs", "tables", "figures", "audit", "logs"]:
-        (WORK / sub).mkdir(parents=True, exist_ok=True)
+    from google.colab import drive      # already mounted in the config cell (needed here for flush_and_unmount)
 
 import torch, torch.nn as nn, torch.nn.functional as F
 import torchvision

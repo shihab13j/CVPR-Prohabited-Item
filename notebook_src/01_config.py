@@ -47,6 +47,23 @@ IDLE_DISCONNECT_MIN = 20        # Colab: release the GPU runtime if it sits idle
 DRIVE_DIR = "/content/drive/MyDrive/xguard"      # Colab: pack + all run outputs live here (survive disconnects)
 
 
+def mount_drive():
+    """Mount Google Drive BEFORE anything is written under /content/drive (Colab refuses to mount over files)."""
+    if os.path.ismount("/content/drive"):
+        return                                     # already mounted (cell re-run)
+    if os.path.isdir("/content/drive") and os.listdir("/content/drive"):
+        # local leftovers from a run that wrote here before mounting: move them away (they are NOT on Drive)
+        bak = f"/content/drive_local_leftover_{int(time.time())}"
+        shutil.move("/content/drive", bak)
+        print(f"moved local leftovers {bak} (not your Drive files) so Drive can be mounted")
+    from google.colab import drive
+    drive.mount("/content/drive")
+
+
+if PLATFORM == "colab":
+    mount_drive()
+
+
 def _find_kaggle_pack():
     for pat in ["/kaggle/input/*/pack_v2", "/kaggle/input/*/*/pack_v2", "/kaggle/input/*/*/*/pack_v2", "/kaggle/input/*/*/*/*/pack_v2"]:
         hits = [h for h in glob.glob(pat) if os.path.exists(os.path.join(h, "meta.pkl"))]
