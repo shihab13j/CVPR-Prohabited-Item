@@ -61,6 +61,8 @@ if MODE == "full":
         release_runtime("Google Drive is full")
         raise StopExecution()
 
+if MODE in ("full", "test"):
+    run_diagnostics()        # cheap, no training: decomposes the unknown failure of every finished model
 PILOT = None
 _gate_on = MODE == "full" and C.PILOT_GATE and not C.PILOT_FORCE and \
     any(s["group"] == "core" and s["seed"] == 0 for s in SELECTED)
@@ -86,6 +88,8 @@ for spec in SELECTED:
         gc.collect()
         if DEVICE.type == "cuda":
             torch.cuda.empty_cache()
+if MODE == "full":
+    run_diagnostics()        # the models trained in this session
 RUN_STATUS = pd.DataFrame([dict(run=k, status=v) for k, v in STATUS.items()])
 display(RUN_STATUS)
 RUN_STATUS.to_csv(WORK / "logs" / f"run_status_{MODE}.csv", index=False)

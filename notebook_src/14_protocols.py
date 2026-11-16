@@ -101,6 +101,8 @@ def registry():
               S("six_xguard", "core", 1, six, variant("xguard"), seed=s, full_eval=True, analyze=True, occ_sweep=True),
               # fair control for the occlusion claim: the plain detector trained with XGuard's occlusion corruption
               S("six_base-occaug", "control", 1, six, variant("base", aug="occmix"), seed=s, full_eval=True, occ_sweep=True)]
+    for v in ["xguard-cus", "xguard-sira", "xguard-oer"]:   # leave-one-out under the MAIN protocol (12 ep, full test sets)
+        R.append(S(f"loo-{v.split('-')[1]}", "ablation_main", 1, six, variant(v), seed=0, full_eval=True, occ_sweep=True))
     for g in ["pseudo", "vos", "gaussian"]:   # unknown supervision compared under the SAME protocol as XGuard (12 ep, full test)
         R.append(S(f"unkF-{g}", "unknown_main", 1, six, variant("xguard", unk_gen=g), seed=0, full_eval=True))
     for s in C.SEEDS_ABL:
@@ -144,7 +146,7 @@ def registry():
 
 
 REGISTRY = registry()
-PRIORITY = ["core", "control", "unknown_main", "ablation", "loco", "sira_validation", "unknown_gen", "prototype", "occlusion", "baselines", "zeroshot",
+PRIORITY = ["core", "control", "unknown_main", "ablation_main", "ablation", "loco", "sira_validation", "unknown_gen", "prototype", "occlusion", "baselines", "zeroshot",
             "indomain", "lodo", "num_sources", "encoder", "ultralytics"]
 SELECTED = sorted([s for s in REGISTRY if s["tier"] in TIERS], key=lambda s: (PRIORITY.index(s["group"]), s["seed"], s["name"]))
 if MODE == "test":   # one representative per configuration type of THIS platform's tiers exercises every code path
@@ -238,7 +240,8 @@ class ZeroShotOV(nn.Module):
             if self.kind == "owlvit":
                 inp = self.proc(text=[self.queries], images=im, return_tensors="pt").to(DEVICE)
                 out = self.net(**inp)
-                r = self.proc.post_process_object_detection(out, threshold=C.SCORE_THR, target_sizes=torch.tensor([[H, W]], device=DEVICE))[0]
+                _pp = getattr(self.proc, "post_process_object_detection", None) or self.proc.post_process_grounded_object_detection
+                r = _pp(out, threshold=C.SCORE_THR, target_sizes=torch.tensor([[H, W]], device=DEVICE))[0]   # renamed in new transformers
                 b, s, l = r["boxes"].float().cpu(), r["scores"].float().cpu(), r["labels"].cpu()
             else:
                 inp = self.proc(images=im, text=". ".join(self.queries) + ".", return_tensors="pt").to(DEVICE)
@@ -457,3 +460,111 @@ def run_experiment(spec):
     if DEVICE.type == "cuda":
         torch.cuda.empty_cache()
     return "finished"
+
+
+# ------------------------- unknown-failure decomposition (no training; uses saved checkpoints) -------------------------
+def _auroc(pos, neg):
+    if len(pos) < 5 or len(neg) < 5:
+        return float("nan")
+    from sklearn.metrics import roc_auc_score
+    y = np.r_[np.ones(len(pos)), np.zeros(len(neg))]
+    return float(roc_auc_score(y, np.r_[pos, neg]))
+
+
+@torch.no_grad()
+def _oracle_scores(model, recs):
+    """Score every ground-truth box (oracle localisation) with several unknown scores. Returns names, score dict, z."""
+    allc = {c: i for i, c in enumerate(sorted({c for r in ALL_REC for c in r["cls"]}))}
+    inv = {i: c for c, i in allc.items()}
+    names, Z, S_ = [], [], defaultdict(list)
+    for xs, ts in make_loader(recs, allc, False, bs=8):
+        keep = [i for i, t in enumerate(ts) if len(t["boxes"])]
+        if not keep:
+            continue
+        xs = [xs[i].to(DEVICE) for i in keep]; bx = [ts[i]["boxes"].to(DEVICE) for i in keep]
+        names += [inv[int(l)] for i in keep for l in ts[i]["labels"]]
+        with torch.autocast(DEVICE.type, dtype=AMP_DTYPE, enabled=C.AMP):
+            il, _, feats = model.features(xs)
+            sc = [torch.tensor([w1 / w0, h1 / h0, w1 / w0, h1 / h0], device=DEVICE) for x, (h1, w1) in zip(xs, il.image_sizes)
+                  for (h0, w0) in [x.shape[-2:]]]
+            out = model.head(feats, [b * s for b, s in zip(bx, sc)], il.image_sizes)
+        out = {k: (v.float() if torch.is_tensor(v) else v) for k, v in out.items()}
+        probs, o, s_k, s_t, U, ent = model.open_scores(out)
+        pfg = probs[:, 1:]; cond = pfg / pfg.sum(1, keepdim=True).clamp(min=1e-6)
+        S_["msp"] += (1 - cond.max(1).values).cpu().tolist()
+        S_["objectness_x_msp"] += (o * (1 - cond.max(1).values)).cpu().tolist()
+        S_["energy"] += (-torch.logsumexp(out["fg"].float(), 1)).cpu().tolist()
+        S_["prototype_distance"] += (1 - s_k).cpu().tolist()
+        S_["model_unknown_score"] += U.cpu().tolist()
+        if getattr(model, "unk_head", None) is not None:
+            S_["unknown_head_no_objectness"] += (U / o.clamp(min=1e-6)).cpu().tolist()
+        Z.append(out["z"].float().cpu())
+    return names, {k: np.array(v) for k, v in S_.items()}, (torch.cat(Z).numpy() if Z else np.zeros((0, 1)))
+
+
+def diagnose_run(rd):
+    """Where does unknown discovery fail? (1) oracle boxes: can the scores separate unknown from known objects?
+    (2) end-to-end: are unknown objects localised at all, absorbed as a known class, or flagged as unknown?
+    Mahalanobis / centroid scores are fitted on SOURCE (SIXray train) embeddings only."""
+    cfg, meta = jload(rd / "config.json", {}), jload(rd / "train_meta.json", {})
+    spec, known = cfg["spec"], cfg["known"]
+    model = load_weights(spec, known, rd / "checkpoint_best.pt", meta)
+    src = cap([r for r in split_recs("sixray", "train") if not r["neg"] and not r.get("excluded")], C.DIAG_SRC, "diag")
+    sn, _, sz = _oracle_scores(model, src)
+    sy = np.array([resolve_known(c, known) for c in sn], dtype=object)
+    mus = {c: sz[sy == c].mean(0) for c in known if (sy == c).sum() >= 5}
+    Xc = np.concatenate([sz[sy == c] - mus[c] for c in mus])
+    prec = np.linalg.inv(np.cov(Xc.T) + 1e-3 * np.eye(Xc.shape[1]))
+    cen = np.stack([m / np.linalg.norm(m) for m in mus.values()])
+    tgt = cap([r for r in split_recs("pidray", "test") if not r["neg"] and not r.get("excluded")], C.DIAG_TGT, "diag")
+    tn, ts, tz = _oracle_scores(model, tgt)
+    ts["mahalanobis"] = np.min(np.stack([np.einsum("ij,jk,ik->i", tz - m, prec, tz - m) for m in mus.values()], 1), 1)
+    ts["centroid_distance"] = 1 - ((tz / np.linalg.norm(tz, axis=1, keepdims=True).clip(1e-6)) @ cen.T).max(1)
+    unk = np.array([resolve_known(c, known) is None for c in tn])
+    res = dict(n_known=int((~unk).sum()), n_unknown=int(unk.sum()),
+               oracle_auroc={k: _auroc(v[unk], v[~unk]) for k, v in ts.items()})
+    # end-to-end on the saved predictions of the same model (full PIDray test set)
+    pf = rd / "preds_pidray.pkl"
+    if pf.exists():
+        recs = eval_set("pidray", spec.get("full_eval", True))
+        preds, _ = load_preds(pf, recs)
+        thr = jload(rd / "thresholds.json", {}) or {}
+        tk, tu = thr.get("tau_known", 0.5), thr.get("tau_U", 0.5)
+        n = loc = absorbed = flagged = 0
+        for r, p in zip(recs, preds or []):
+            if p is None:
+                continue
+            gu = [b for b, c in zip(r["boxes"], r["cls"]) if resolve_known(c, known) is None]
+            if not gu:
+                continue
+            g = torch.as_tensor(np.array(gu), dtype=torch.float32)
+            pb, pu = np.asarray(p["boxes"], np.float32).reshape(-1, 4), np.asarray(p["ub"], np.float32).reshape(-1, 4)
+            allb = np.concatenate([pb, pu])
+            kb = pb[np.asarray(p["scores"], np.float32) >= tk]
+            ubb = pu[np.asarray(p["us"], np.float32) >= tu]
+            hit = lambda B: (box_iou(g, torch.as_tensor(B, dtype=torch.float32)).max(1).values >= 0.5).numpy() if len(B) else np.zeros(len(g), bool)
+            n += len(g); loc += hit(allb).sum(); absorbed += hit(kb).sum(); flagged += hit(ubb).sum()
+        res["end_to_end"] = dict(n_unknown=int(n), localised_by_any_box=float(loc / max(1, n)),
+                                 detected_as_known_class=float(absorbed / max(1, n)), flagged_unknown=float(flagged / max(1, n)))
+    jdump(res, rd / "diag_unknown.json")
+    del model; gc.collect()
+    if DEVICE.type == "cuda":
+        torch.cuda.empty_cache()
+    return res
+
+
+def run_diagnostics():
+    if not C.RUN_DIAG:
+        return
+    for rd in sorted(p for p in RUNS_DIR.iterdir() if p.is_dir() and not p.name.startswith("_")):
+        sp = jload(rd / "config.json", {}).get("spec", {})
+        if sp.get("kind", "xguard") != "xguard" or not (rd / "DONE").exists() or not (rd / "checkpoint_best.pt").exists() \
+                or (rd / "diag_unknown.json").exists():
+            continue
+        try:
+            t0 = time.time(); r = diagnose_run(rd)
+            print(f"🔎 diagnostics {rd.name}: oracle AUROC " + ", ".join(f"{k}={100 * v:.1f}" for k, v in r["oracle_auroc"].items())
+                  + (f" | localised {100 * r['end_to_end']['localised_by_any_box']:.1f}%" if "end_to_end" in r else "")
+                  + f"  [{(time.time() - t0) / 60:.1f} min]")
+        except Exception as e:
+            traceback.print_exc(); print(f"diagnostics failed for {rd.name}: {type(e).__name__}: {e}")

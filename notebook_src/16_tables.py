@@ -235,6 +235,40 @@ for t, lab in [("six_base", "none (detector score only)"), ("unkF-gaussian", "Ga
                  "synthetic max-known cos": last("synth_max_known_cos"), "real max-known cos": last("real_max_known_cos")}
 save_table(pd.DataFrame(rows).T, "T9b_unknown_supervision", "Unknown supervision recipes in the same detector, 12 epochs, full test sets, seed 0.")
 
+# ---- T7b leave-one-out + unknown supervision under the MAIN protocol ----
+rows = {}
+for t, lab in [("six_base", "reference"), ("six_base-occaug", "reference + occlusion aug"), ("six_xguard", "XGuard (full)"),
+               ("loo-cus", "XGuard − CUS"), ("loo-sira", "XGuard − SIRA"), ("loo-oer", "XGuard − OER"),
+               ("unkF-pseudo", "XGuard, CUS→pseudo-unknowns"), ("unkF-vos", "XGuard, CUS→VOS-style"), ("unkF-gaussian", "XGuard, CUS→Gaussian"),
+               ("six_rtdetr-l", "RT-DETR-L"), ("six_owlvit", "OWL-ViT zero-shot")]:
+    rows[lab] = {"SIXray AP50": val(t, "sixray", "AP50"), "PIDray AP50": val(t, "pidray", "AP50"),
+                 "PIDray-hidden AP50": val(t, "pidray", "AP50", "hidden"), "PIDray U-R50": val(t, "pidray", "U_R50"),
+                 "PIDray locAUROC": val(t, "pidray", "locAUROC"), "HiXray AOSE ↓": val(t, "hixray", "AOSE", scale=1),
+                 "occ 50% AP50": val(t, "sixray", "AP50", "occ0.5")}
+save_table(pd.DataFrame(rows).T, "T7b_leave_one_out", "Leave-one-out and unknown supervision, same 12-epoch protocol and full test sets (new runs: 1 seed).")
+
+# ---- T15 where does unknown discovery fail? (oracle boxes vs end-to-end) ----
+rows = {}
+for t, lab in [("six_base", "reference"), ("six_base-occaug", "reference + occlusion aug"), ("six_xguard", "XGuard (full)"),
+               ("loo-cus", "XGuard − CUS"), ("loo-sira", "XGuard − SIRA"), ("loo-oer", "XGuard − OER"),
+               ("unkF-pseudo", "pseudo-unknowns"), ("unkF-vos", "VOS-style"), ("unkF-gaussian", "Gaussian")]:
+    ds = [jload(rd / "diag_unknown.json") for rd in all_runs() if rd.name.rsplit("_s", 1)[0] == t and (rd / "diag_unknown.json").exists()]
+    if not ds:
+        continue
+    def agg(vals):
+        v = np.array([x for x in vals if x is not None and np.isfinite(x)], float) * 100
+        return "n/a" if not len(v) else (f"{v.mean():.1f}±{v.std(ddof=1):.1f}" if len(v) > 1 else f"{v.mean():.1f}")
+    r = {f"oracle AUROC: {k}": agg([d["oracle_auroc"].get(k) for d in ds]) for k in
+         ["msp", "objectness_x_msp", "energy", "prototype_distance", "centroid_distance", "mahalanobis", "model_unknown_score", "unknown_head_no_objectness"]}
+    for k in ["localised_by_any_box", "detected_as_known_class", "flagged_unknown"]:
+        r[f"end-to-end: {k}"] = agg([d.get("end_to_end", {}).get(k) for d in ds])
+    rows[f"{lab} (n={len(ds)})"] = r
+if rows:
+    save_table(pd.DataFrame(rows).T, "T15_unknown_decomposition",
+               "Unknown discovery on PIDray. Oracle: ground-truth boxes scored by each unknown score (AUROC unknown vs known; 50 = chance; "
+               "Mahalanobis/centroid fitted on SIXray train only). End-to-end: share of unseen objects localised by any output box, "
+               "output as a known class above the source threshold, or flagged unknown.")
+
 # ---- T10 reliability / referral ----
 rows = {}
 for t in ["six_base", "six_xguard"]:
