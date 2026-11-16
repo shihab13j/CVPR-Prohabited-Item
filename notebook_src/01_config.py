@@ -60,7 +60,18 @@ def mount_drive():
         shutil.move("/content/drive", bak)
         print(f"moved local leftovers {bak} (not your Drive files) so Drive can be mounted")
     from google.colab import drive
-    drive.mount("/content/drive")
+    try:
+        drive.mount("/content/drive")
+    except Exception as e1:                         # e.g. "credential propagation was unsuccessful"
+        print(f"Drive mount failed ({str(e1)[:80]}) -> retrying once with force_remount")
+        try:
+            drive.mount("/content/drive", force_remount=True)
+        except Exception as e2:
+            raise RuntimeError(
+                "Google Drive could not be mounted (a Colab login problem, not a code problem). Fix: "
+                "(1) left sidebar -> Files (folder icon) -> 'Mount Drive' icon, wait for 'drive' to appear, then Run all; "
+                "(2) or open Colab in an Incognito window signed in ONLY with the account that owns MyDrive/xguard; "
+                "(3) Runtime -> Disconnect and delete runtime before retrying so the GPU is not idle.") from e2
 
 
 if PLATFORM == "colab":
