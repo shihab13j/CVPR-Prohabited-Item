@@ -508,6 +508,7 @@ def diagnose_run(rd):
     Mahalanobis / centroid scores are fitted on SOURCE (SIXray train) embeddings only."""
     cfg, meta = jload(rd / "config.json", {}), jload(rd / "train_meta.json", {})
     spec, known = cfg["spec"], cfg["known"]
+    wait_pack("sixray"); wait_pack("pidray")      # PIDray images are extracted in the background: wait for them
     model = load_weights(spec, known, rd / "checkpoint_best.pt", meta)
     src = cap([r for r in split_recs("sixray", "train") if not r["neg"] and not r.get("excluded")], C.DIAG_SRC, "diag")
     sn, _, sz = _oracle_scores(model, src)
@@ -517,6 +518,9 @@ def diagnose_run(rd):
     prec = np.linalg.inv(np.cov(Xc.T) + 1e-3 * np.eye(Xc.shape[1]))
     cen = np.stack([m / np.linalg.norm(m) for m in mus.values()])
     tgt = cap([r for r in split_recs("pidray", "test") if not r["neg"] and not r.get("excluded")], C.DIAG_TGT, "diag")
+    miss = [r["path"] for r in src + tgt if not os.path.exists(r["path"])]
+    if miss:
+        raise RuntimeError(f"{len(miss)} images missing (e.g. {miss[0]}) -> diagnostics not computed")
     tn, ts, tz = _oracle_scores(model, tgt)
     ts["mahalanobis"] = np.min(np.stack([np.einsum("ij,jk,ik->i", tz - m, prec, tz - m) for m in mus.values()], 1), 1)
     ts["centroid_distance"] = 1 - ((tz / np.linalg.norm(tz, axis=1, keepdims=True).clip(1e-6)) @ cen.T).max(1)
@@ -546,7 +550,7 @@ def diagnose_run(rd):
             n += len(g); loc += hit(allb).sum(); absorbed += hit(kb).sum(); flagged += hit(ubb).sum()
         res["end_to_end"] = dict(n_unknown=int(n), localised_by_any_box=float(loc / max(1, n)),
                                  detected_as_known_class=float(absorbed / max(1, n)), flagged_unknown=float(flagged / max(1, n)))
-    jdump(res, rd / "diag_unknown.json")
+    jdump(res, rd / "diag_unknown_v2.json")
     del model; gc.collect()
     if DEVICE.type == "cuda":
         torch.cuda.empty_cache()
@@ -559,7 +563,7 @@ def run_diagnostics():
     for rd in sorted(p for p in RUNS_DIR.iterdir() if p.is_dir() and not p.name.startswith("_")):
         sp = jload(rd / "config.json", {}).get("spec", {})
         if sp.get("kind", "xguard") != "xguard" or not (rd / "DONE").exists() or not (rd / "checkpoint_best.pt").exists() \
-                or (rd / "diag_unknown.json").exists():
+                or (rd / "diag_unknown_v2.json").exists():
             continue
         try:
             t0 = time.time(); r = diagnose_run(rd)

@@ -252,7 +252,7 @@ rows = {}
 for t, lab in [("six_base", "reference"), ("six_base-occaug", "reference + occlusion aug"), ("six_xguard", "XGuard (full)"),
                ("loo-cus", "XGuard − CUS"), ("loo-sira", "XGuard − SIRA"), ("loo-oer", "XGuard − OER"),
                ("unkF-pseudo", "pseudo-unknowns"), ("unkF-vos", "VOS-style"), ("unkF-gaussian", "Gaussian")]:
-    ds = [jload(rd / "diag_unknown.json") for rd in all_runs() if rd.name.rsplit("_s", 1)[0] == t and (rd / "diag_unknown.json").exists()]
+    ds = [jload(rd / "diag_unknown_v2.json") for rd in all_runs() if rd.name.rsplit("_s", 1)[0] == t and (rd / "diag_unknown_v2.json").exists()]
     if not ds:
         continue
     def agg(vals):
