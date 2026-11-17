@@ -198,18 +198,17 @@ if PLATFORM == "kaggle":      # T4 / P100 have 16 GB: same EFFECTIVE batch (8) a
 if MODE == "test":
     C.TEST_ITERS, C.TEST_EVAL, C.TEST_VAL, C.BOOTSTRAP = 30, 120, 60, 100
     C.SEEDS_MAIN, C.SEEDS_ABL = [0], [0]
-# DEADLINE plan (paper due): most valuable runs first; anything unfinished simply stays out of the tables.
-#   occlusion fair control -> unknown-supervision baselines -> seed 1 -> RT-DETR -> zero-shot -> seed 2
-C.DEADLINE_RUNS = ["unkF-pseudo_s0",                                   # repair attempt: real unlabeled objects as unknowns
-                   "loo-cus_s0",                                       # full minus CUS: does the synthesis cause the damage?
-                   "six_rtdetr-l_s0",                                  # DETR-family detector
-                   "loo-sira_s0", "loo-oer_s0",                        # full minus SIRA / minus OER
-                   "six_owlvit_s0",                                    # zero-shot open-vocabulary reference (name-free)
-                   "unkF-vos_s0", "six_gdino_s0"]                      # only if compute is left
+# FULL PLAN (priority order: whatever finishes first is the most valuable). Entries with * are expanded over the registry.
+#   unknown repair + leave-one-out -> modern / open-vocabulary baselines -> remaining unknown supervision -> single modules
+#   and the SIRA x OER interaction -> more detectors -> oracle-vocabulary references -> LOCO -> extra seeds
+C.DEADLINE_RUNS = ["unkF-pseudo_s0", "loo-cus_s0", "six_rtdetr-l_s0", "loo-sira_s0", "loo-oer_s0", "six_owlvit_s0",
+                   "unkF-vos_s0", "unkF-gaussian_s0", "loo-rcr_s0",
+                   "add-sira_s0", "add-oer_s0", "add-stpb_s0", "add-rcr_s0", "add-sira+oer_s0", "add-stpb+cus_s0",
+                   "six_fcos_s0", "six_retinanet_s0", "six_yolo11s_s0", "six_gdino_s0", "six_owlvit-oracle_s0", "six_gdino-oracle_s0",
+                   "loco-*_s0",
+                   "unkF-pseudo_s1", "unkF-pseudo_s2", "loo-cus_s1", "loo-cus_s2", "unkF-vos_s1", "unkF-vos_s2"]
 if C.DEADLINE:
-    C.PILOT_GATE = False
-    if PLATFORM == "colab":   # hard GPU budget for this session: stop (and release the GPU) in time for report + submission
-        C.MAX_SESSION_HOURS = float(os.environ.get("XGUARD_MAX_H", 3.6))          # the deadline plan is fixed in advance: no early stop after seed 0
+    C.PILOT_GATE = False          # the plan is fixed in advance: no early stop after seed 0
 if C.REQUIRE_TEXT is None:
     C.REQUIRE_TEXT = MODE == "full"
 if SMOKE:   # tiny CPU self-test

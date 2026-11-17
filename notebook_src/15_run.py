@@ -63,6 +63,7 @@ if MODE == "full":
 
 if MODE in ("full", "test"):
     run_diagnostics()        # cheap, no training: decomposes the unknown failure of every finished model
+STOPPED_EARLY = False
 PILOT = None
 _gate_on = MODE == "full" and C.PILOT_GATE and not C.PILOT_FORCE and \
     any(s["group"] == "core" and s["seed"] == 0 for s in SELECTED)
@@ -74,16 +75,18 @@ for spec in SELECTED:
                   "   Send me the PILOT line above (logs/pilot_check.json). Set C.PILOT_FORCE = True only to continue anyway.")
             break
     if MODE == "full" and not drive_guard(C.MIN_DRIVE_GB):
+        STOPPED_EARLY = True
         break
     if time_left_h() < 0.5:
         print(f"⏱  {elapsed_h():.1f} h used -> stopping. Re-run the notebook to continue (finished runs are kept on Drive).")
+        STOPPED_EARLY = True
         break
     try:
         STATUS[spec["name"]] = run_experiment(spec)
         if MODE == "full":
             run_diagnostics()        # right away, so a session stopped early still has the diagnostics of finished runs
     except TimeUp as e:
-        STATUS[spec["name"]] = "paused"; print("⏱ ", e); break
+        STATUS[spec["name"]] = "paused"; print("⏱ ", e); STOPPED_EARLY = True; break
     except Exception as e:
         traceback.print_exc()
         STATUS[spec["name"]] = f"error: {type(e).__name__}: {str(e)[:200]}"
@@ -145,6 +148,8 @@ def estimate_full_plan():
 
 if MODE == "test":
     PLAN = estimate_full_plan()
-if MODE == "full" and PLATFORM == "colab":
-    # every result is already on Drive; tables / figures / gates are built later with MODE='report' on a CPU runtime
-    release_runtime("all selected Colab runs are finished or paused")
+if MODE == "full" and PLATFORM == "colab" and STOPPED_EARLY:
+    release_runtime("session budget reached -> Run all again to continue (finished runs are kept on Drive)")
+elif MODE == "full":
+    IDLE_LIMIT_NOW = 60          # tables / bootstrap run on the CPU: do not let the idle watchdog cut them off
+    print("✅ all planned runs are finished -> building tables, figures and the results zip in this session")

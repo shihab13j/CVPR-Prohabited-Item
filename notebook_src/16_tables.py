@@ -239,18 +239,36 @@ save_table(pd.DataFrame(rows).T, "T9b_unknown_supervision", "Unknown supervision
 rows = {}
 for t, lab in [("six_base", "reference"), ("six_base-occaug", "reference + occlusion aug"), ("six_xguard", "XGuard (full)"),
                ("loo-cus", "XGuard − CUS"), ("loo-sira", "XGuard − SIRA"), ("loo-oer", "XGuard − OER"),
+               ("loo-rcr", "XGuard − RCR"),
+               ("add-sira", "reference + SIRA"), ("add-oer", "reference + OER"), ("add-stpb", "reference + STPB"),
+               ("add-rcr", "reference + RCR"), ("add-sira+oer", "reference + SIRA + OER"), ("add-stpb+cus", "reference + STPB + CUS"),
                ("unkF-pseudo", "XGuard, CUS→pseudo-unknowns"), ("unkF-vos", "XGuard, CUS→VOS-style"), ("unkF-gaussian", "XGuard, CUS→Gaussian"),
-               ("six_rtdetr-l", "RT-DETR-L"), ("six_owlvit", "OWL-ViT zero-shot")]:
+               ("six_rtdetr-l", "RT-DETR-L"), ("six_fcos", "FCOS"), ("six_retinanet", "RetinaNet"), ("six_yolo11s", "YOLO11-s"),
+               ("six_owlvit", "OWL-ViT zero-shot (name-free)"), ("six_gdino", "Grounding DINO zero-shot (name-free)"),
+               ("six_owlvit-oracle", "OWL-ViT (oracle vocabulary)†"), ("six_gdino-oracle", "Grounding DINO (oracle vocabulary)†")]:
     rows[lab] = {"SIXray AP50": val(t, "sixray", "AP50"), "PIDray AP50": val(t, "pidray", "AP50"),
                  "PIDray-hidden AP50": val(t, "pidray", "AP50", "hidden"), "PIDray U-R50": val(t, "pidray", "U_R50"),
                  "PIDray locAUROC": val(t, "pidray", "locAUROC"), "HiXray AOSE ↓": val(t, "hixray", "AOSE", scale=1),
                  "occ 50% AP50": val(t, "sixray", "AP50", "occ0.5")}
 save_table(pd.DataFrame(rows).T, "T7b_leave_one_out", "Leave-one-out and unknown supervision, same 12-epoch protocol and full test sets (new runs: 1 seed).")
 
+# ---- T7c interaction I_AB = M(A+B) - M(A) - M(B) + M(reference) ----
+rows = {}
+for A, Bm, AB in [("add-sira", "add-oer", "add-sira+oer")]:
+    r = {}
+    for lab, tg, m, sub in [("SIXray AP50", "sixray", "AP50", "all"), ("PIDray AP50", "pidray", "AP50", "all"),
+                            ("PIDray U-R50", "pidray", "U_R50", "all"), ("occ 50% AP50", "sixray", "AP50", "occ0.5")]:
+        v = [val(t, tg, m, sub, fmt=False) for t in (AB, A, Bm, "six_base")]
+        r[lab] = f"{v[0] - v[1] - v[2] + v[3]:+.1f}" if all(np.isfinite(v)) else "—"
+    rows[f"{A.split('-')[1].upper()} × {Bm.split('-')[1].upper()}"] = r
+save_table(pd.DataFrame(rows).T, "T7c_interaction", "Module interaction I_AB = M(A+B) − M(A) − M(B) + M(ref); 0 = additive (reference: 3-seed mean).")
+
 # ---- T15 where does unknown discovery fail? (oracle boxes vs end-to-end) ----
 rows = {}
 for t, lab in [("six_base", "reference"), ("six_base-occaug", "reference + occlusion aug"), ("six_xguard", "XGuard (full)"),
-               ("loo-cus", "XGuard − CUS"), ("loo-sira", "XGuard − SIRA"), ("loo-oer", "XGuard − OER"),
+               ("loo-cus", "XGuard − CUS"), ("loo-sira", "XGuard − SIRA"), ("loo-oer", "XGuard − OER"), ("loo-rcr", "XGuard − RCR"),
+               ("add-sira", "+ SIRA"), ("add-oer", "+ OER"), ("add-stpb", "+ STPB"), ("add-rcr", "+ RCR"),
+               ("add-sira+oer", "+ SIRA + OER"), ("add-stpb+cus", "+ STPB + CUS"),
                ("unkF-pseudo", "pseudo-unknowns"), ("unkF-vos", "VOS-style"), ("unkF-gaussian", "Gaussian")]:
     ds = [jload(rd / "diag_unknown_v2.json") for rd in all_runs() if rd.name.rsplit("_s", 1)[0] == t and (rd / "diag_unknown_v2.json").exists()]
     if not ds:

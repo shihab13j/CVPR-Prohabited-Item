@@ -70,7 +70,7 @@ if PLATFORM == "colab" and MODE in ("test", "full") and DEVICE.type == "cuda" an
             except Exception:
                 continue
             idle = idle + 1 if u < 3 else 0
-            if idle >= IDLE_DISCONNECT_MIN:
+            if idle >= globals().get("IDLE_LIMIT_NOW", IDLE_DISCONNECT_MIN):   # raised while tables are built on the CPU
                 release_runtime(f"GPU idle for {idle} min (finished, crashed or stuck)")
                 return
     threading.Thread(target=_gpu_watchdog, daemon=True).start()

@@ -101,10 +101,16 @@ def registry():
               S("six_xguard", "core", 1, six, variant("xguard"), seed=s, full_eval=True, analyze=True, occ_sweep=True),
               # fair control for the occlusion claim: the plain detector trained with XGuard's occlusion corruption
               S("six_base-occaug", "control", 1, six, variant("base", aug="occmix"), seed=s, full_eval=True, occ_sweep=True)]
-    for v in ["xguard-cus", "xguard-sira", "xguard-oer"]:   # leave-one-out under the MAIN protocol (12 ep, full test sets)
-        R.append(S(f"loo-{v.split('-')[1]}", "ablation_main", 1, six, variant(v), seed=0, full_eval=True, occ_sweep=True))
+    for v in ["xguard-cus", "xguard-sira", "xguard-oer", "xguard-rcr"]:   # leave-one-out, MAIN protocol (12 ep, full test sets)
+        for s in (C.SEEDS_MAIN if v == "xguard-cus" else [0]):
+            R.append(S(f"loo-{v.split('-')[1]}", "ablation_main", 1, six, variant(v), seed=s, full_eval=True, occ_sweep=True))
     for g in ["pseudo", "vos", "gaussian"]:   # unknown supervision compared under the SAME protocol as XGuard (12 ep, full test)
-        R.append(S(f"unkF-{g}", "unknown_main", 1, six, variant("xguard", unk_gen=g), seed=0, full_eval=True))
+        for s in (C.SEEDS_MAIN if g in ("pseudo", "vos") else [0]):
+            R.append(S(f"unkF-{g}", "unknown_main", 1, six, variant("xguard", unk_gen=g), seed=s, full_eval=True))
+    for tag, cfg in [("add-sira", variant("sira")), ("add-oer", variant("oer")), ("add-stpb", variant("stpb")),
+                     ("add-rcr", variant("base", rcr=1)), ("add-sira+oer", variant("sira+oer")),
+                     ("add-stpb+cus", variant("stpb", unk_gen="cus"))]:   # single modules + interactions, MAIN protocol
+        R.append(S(tag, "ablation_main", 1, six, cfg, seed=0, full_eval=True, occ_sweep=True))
     for s in C.SEEDS_ABL:
         for v in ["sira", "oer", "stpb", "sira+oer", "sira+oer+stpb", "sira+oer+stpb+cus", "xguard-sira", "xguard-oer", "xguard-cus"]:
             R.append(S(f"six_{v}", "ablation", 1, six, variant(v), seed=s, analyze=v == "sira",
@@ -157,7 +163,9 @@ if MODE == "test":   # one representative per configuration type of THIS platfor
     SELECTED = [s for s in SELECTED if s["tag"] in keep_tags and s["seed"] == 0]
 if MODE == "full" and C.DEADLINE:   # deadline plan: the runs that strengthen the paper most, in order of value
     _by = {s["name"]: s for s in REGISTRY}
-    SELECTED = [_by[n] for n in C.DEADLINE_RUNS if n in _by]
+    import fnmatch
+    _names = [s["name"] for s in REGISTRY]
+    SELECTED = [_by[n] for pat in C.DEADLINE_RUNS for n in (fnmatch.filter(_names, pat) if "*" in pat else [pat]) if n in _by]
     print("DEADLINE plan:", [s["name"] for s in SELECTED])
 if MODE == "report":
     SELECTED = []
