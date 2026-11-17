@@ -207,7 +207,9 @@ C.DEADLINE_RUNS = ["unkF-pseudo_s0",                                   # repair 
                    "six_owlvit_s0",                                    # zero-shot open-vocabulary reference (name-free)
                    "unkF-vos_s0", "six_gdino_s0"]                      # only if compute is left
 if C.DEADLINE:
-    C.PILOT_GATE = False          # the deadline plan is fixed in advance: no early stop after seed 0
+    C.PILOT_GATE = False
+    if PLATFORM == "colab":   # hard GPU budget for this session: stop (and release the GPU) in time for report + submission
+        C.MAX_SESSION_HOURS = float(os.environ.get("XGUARD_MAX_H", 3.6))          # the deadline plan is fixed in advance: no early stop after seed 0
 if C.REQUIRE_TEXT is None:
     C.REQUIRE_TEXT = MODE == "full"
 if SMOKE:   # tiny CPU self-test

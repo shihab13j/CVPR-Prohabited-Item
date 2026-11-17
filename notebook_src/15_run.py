@@ -80,6 +80,8 @@ for spec in SELECTED:
         break
     try:
         STATUS[spec["name"]] = run_experiment(spec)
+        if MODE == "full":
+            run_diagnostics()        # right away, so a session stopped early still has the diagnostics of finished runs
     except TimeUp as e:
         STATUS[spec["name"]] = "paused"; print("⏱ ", e); break
     except Exception as e:
